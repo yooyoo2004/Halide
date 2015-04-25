@@ -717,16 +717,16 @@ WEAK int halide_opencl_copy_to_device(void *user_context, buffer_t* buf) {
 #ifdef ENABLE_OPENCL_11
             // OpenCL 1.1 supports stride-aware memory transfers up to 3D, so we
             // can deal with the 2 innermost strides with OpenCL.
-            uint64_t off = z * c.stride_bytes[2] + w * c.stride_bytes[3];
+            size_t off = z * c.stride_bytes[2] + w * c.stride_bytes[3];
 
             size_t offset[3] = { off, 0, 0 };
             size_t region[3] = { c.chunk_size, c.extent[0], c.extent[1] };
 
             debug(user_context)
                 << "    clEnqueueWriteBufferRect ((" << z << ", " << w << "), "
-                << "(" << (void *)c.src << " -> " << c.dst << ") + " << off << ", "
+                << "(" << (void *)c.src << " -> " << c.dst << ") + " << (uint64_t)off << ", "
                 << (int)region[0] << "x" << (int)region[1] << "x" << (int)region[2] << " bytes, "
-                << c.stride_bytes[0] << "x" << c.stride_bytes[1] << ")\n";
+                << (uint64_t)c.stride_bytes[0] << "x" << (uint64_t)c.stride_bytes[1] << ")\n";
 
             cl_int err = clEnqueueWriteBufferRect(ctx.cmd_queue, (cl_mem)c.dst, CL_FALSE,
                                                   offset, offset, region,
@@ -807,16 +807,16 @@ WEAK int halide_opencl_copy_to_host(void *user_context, buffer_t* buf) {
 #ifdef ENABLE_OPENCL_11
             // OpenCL 1.1 supports stride-aware memory transfers up to 3D, so we
             // can deal with the 2 innermost strides with OpenCL.
-            uint64_t off = z * c.stride_bytes[2] + w * c.stride_bytes[3];
+            size_t off = z * c.stride_bytes[2] + w * c.stride_bytes[3];
 
             size_t offset[3] = { off, 0, 0 };
             size_t region[3] = { c.chunk_size, c.extent[0], c.extent[1] };
 
             debug(user_context)
                 << "    clEnqueueReadBufferRect ((" << z << ", " << w << "), "
-                << "(" << (void *)c.src << " -> " << (void *)c.dst << ") + " << off << ", "
+                << "(" << (void *)c.src << " -> " << (void *)c.dst << ") + " << (uint64_t)off << ", "
                 << (int)region[0] << "x" << (int)region[1] << "x" << (int)region[2] << " bytes, "
-                << c.stride_bytes[0] << "x" << c.stride_bytes[1] << ")\n";
+                << (uint64_t)c.stride_bytes[0] << "x" << (uint64_t)c.stride_bytes[1] << ")\n";
 
             cl_int err = clEnqueueReadBufferRect(ctx.cmd_queue, (cl_mem)c.src, CL_FALSE,
                                                  offset, offset, region,
@@ -833,13 +833,13 @@ WEAK int halide_opencl_copy_to_host(void *user_context, buffer_t* buf) {
 #else
             for (int y = 0; y < c.extent[1]; y++) {
                 for (int x = 0; x < c.extent[0]; x++) {
-                    uint64_t off = (x * c.stride_bytes[0] +
-                                    y * c.stride_bytes[1] +
-                                    z * c.stride_bytes[2] +
-                                    w * c.stride_bytes[3]);
+                    size_t off = (x * c.stride_bytes[0] +
+                                  y * c.stride_bytes[1] +
+                                  z * c.stride_bytes[2] +
+                                  w * c.stride_bytes[3]);
                     void *src = (void *)(c.src + off);
                     void *dst = (void *)(c.dst + off);
-                    uint64_t size = c.chunk_size;
+                    size_t size = c.chunk_size;
 
                     debug(user_context)
                         << "    clEnqueueReadBuffer  ((" << x << ", " << y << ", " << z << ", " << w << "), "
@@ -920,9 +920,18 @@ WEAK int halide_opencl_run(void *user_context,
         #endif
     }
 
+
     // Pack dims
-    size_t global_dim[3] = {blocksX*threadsX,  blocksY*threadsY,  blocksZ*threadsZ};
-    size_t local_dim[3] = {threadsX, threadsY, threadsZ};
+    size_t global_dim[3] = {
+        static_cast<size_t>(blocksX*threadsX),
+        static_cast<size_t>(blocksY*threadsY),
+        static_cast<size_t>(blocksZ*threadsZ)
+    };
+    size_t local_dim[3] = {
+        static_cast<size_t>(threadsX),
+        static_cast<size_t>(threadsY),
+        static_cast<size_t>(threadsZ)
+    };
 
     // Set args
     int i = 0;

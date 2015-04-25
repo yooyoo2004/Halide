@@ -44,11 +44,11 @@ WEAK size_t buf_size(void *user_context, buffer_t *buf) {
 struct device_copy {
     uint64_t src, dst;
     // The multidimensional array of contiguous copy tasks that need to be done.
-    uint64_t extent[MAX_COPY_DIMS];
+    size_t extent[MAX_COPY_DIMS];
     // The strides (in bytes) that separate adjacent copy tasks in each dimension.
-    uint64_t stride_bytes[MAX_COPY_DIMS];
+    size_t stride_bytes[MAX_COPY_DIMS];
     // How many contiguous bytes to copy per task
-    uint64_t chunk_size;
+    size_t chunk_size;
 };
 
 WEAK device_copy make_host_to_device_copy(const buffer_t *buf) {
