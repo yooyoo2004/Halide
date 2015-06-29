@@ -132,6 +132,16 @@ int main(int argc, char **argv) {
             }
             outGPyramid[j].compute_root().gpu_tile(x, y, blockw, blockh, DeviceAPI::Default_GPU);
         }
+    } else if (target.has_feature(Target::Renderscript)) {
+        output.parallel(y, 32).vectorize(x, 8);
+        gray.compute_root().parallel(y, 32).vectorize(x, 8);
+        for (int j = 0; j < J; j++) {
+            inGPyramid[j].compute_root().shader(x, y, DeviceAPI::Renderscript);
+            gPyramid[j].compute_root().parallel(k);
+            //gPyramid[j].compute_root();//.shader(x, y, DeviceAPI::Renderscript);
+            outGPyramid[j].compute_root().shader(x, y, DeviceAPI::Renderscript);
+        }
+//        output.reorder(c, x, y).unroll(c).bound(c, 0, 3).compute_root(); //shader(x, y, c, DeviceAPI::Renderscript);
     } else {
         // cpu schedule
         Var yi;
@@ -154,7 +164,8 @@ int main(int argc, char **argv) {
         }
     }
 
-    output.compile_to_file("local_laplacian", {levels, alpha, beta, input}, target);
+    output.compile_to_file(
+        target.arch == Target::Arch::ARM? "local_laplacian_arm": "local_laplacian", {levels, alpha, beta, input}, target);
 
     return 0;
 }

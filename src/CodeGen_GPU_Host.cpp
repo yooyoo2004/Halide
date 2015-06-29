@@ -168,6 +168,7 @@ vector<GPU_Argument> GPU_Host_Closure::arguments() {
         debug(2) << "var: " << i.first << "\n";
         res.push_back(GPU_Argument(i.first, false, i.second, 0));
     }
+    vector<GPU_Argument> non_read;
     for (const pair<string, BufferRef> &i : buffers) {
         debug(2) << "buffer: " << i.first << " " << i.second.size;
         if (i.second.read) debug(2) << " (read)";
@@ -177,8 +178,19 @@ vector<GPU_Argument> GPU_Host_Closure::arguments() {
         GPU_Argument arg(i.first, true, i.second.type, i.second.dimensions, i.second.size);
         arg.read = i.second.read;
         arg.write = i.second.write;
-        res.push_back(arg);
+        // Make sure that the output buffer comes last.
+        // This is the one that will be used for iterating over using
+        // Renderscript foreach API.
+        // And at runtime there is no indication as to whether buffer
+        // is input or output.
+        if (i.second.read) {
+            res.push_back(arg);
+        } else {
+            non_read.push_back(arg);
+        }
     }
+    res.insert(res.end(), non_read.begin(), non_read.end());
+
     return res;
 }
 

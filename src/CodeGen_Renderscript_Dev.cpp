@@ -344,22 +344,53 @@ void CodeGen_Renderscript_Dev::visit(const Free *f) {
     debug(2) << "RS: Free on device\n";
 }
 
-llvm::Function *CodeGen_Renderscript_Dev::fetch_GetElement_func(Type type) {
+llvm::Function *CodeGen_Renderscript_Dev::fetch_GetElement_func(Type type, int dimensions) {
     // Following symbols correspond to public Android API functions.
     // The symbols will be resolved once the code compiles on the target
     // Android device.
+
+    // Assumption for the choice of the functions below is that
+    // when using vector type(width==4) you specified two coordinates,
+    // when using plain type(width==1) you specified three coordinates.
     std::string func_name;
     debug(2) << "fetch_GetElement_func type.code=" << type.code << " type.width=" << type.width << "\n";
     switch (type.code) {
         case Type::TypeCode::UInt:
             switch (type.width) {
-                case 1: func_name = "_Z20rsGetElementAt_uchar13rs_allocationjjj"; break;
-                case 4: func_name = "_Z21rsGetElementAt_uchar413rs_allocationjj"; break;
+                case 1:
+                    switch(type.bytes()) {
+                        case 1: func_name = "_Z20rsGetElementAt_uchar13rs_allocationjjj"; break;
+                        case 2:
+                            switch(dimensions) {
+                                case 2: func_name = "_Z20rsGetElementAt_short13rs_allocationjj"; break;
+                                case 3: func_name = "_Z20rsGetElementAt_short13rs_allocationjjj"; break;
+                            }
+                            break;
+                        case 4:
+                            switch(dimensions) {
+                                case 2: func_name = "_Z18rsGetElementAt_int13rs_allocationjj"; break;
+                                case 3: func_name = "_Z18rsGetElementAt_int13rs_allocationjjj"; break;
+                            }
+                            break;
+                    }
+                    break;
+                case 4:
+                    switch(type.bytes()) {
+                        case 1: func_name = "_Z21rsGetElementAt_uchar413rs_allocationjj"; break;
+                        case 2: func_name = "_Z21rsGetElementAt_short413rs_allocationjj"; break;
+                        case 4: func_name = "_Z19rsGetElementAt_int413rs_allocationjj"; break;
+                    }
+                    break;
             }
             break;
         case Type::TypeCode::Float:
             switch (type.width) {
-                case 1: func_name = "_Z20rsGetElementAt_float13rs_allocationjjj"; break;
+                case 1:
+                    switch(dimensions) {
+                        case 2: func_name = "_Z20rsGetElementAt_float13rs_allocationjj"; break;
+                        case 3: func_name = "_Z20rsGetElementAt_float13rs_allocationjjj"; break;
+                    }
+                    break;
                 case 4: func_name = "_Z21rsGetElementAt_float413rs_allocationjj"; break;
             }
             break;
@@ -371,22 +402,52 @@ llvm::Function *CodeGen_Renderscript_Dev::fetch_GetElement_func(Type type) {
     return func;
 }
 
-llvm::Function *CodeGen_Renderscript_Dev::fetch_SetElement_func(Type type) {
+llvm::Function *CodeGen_Renderscript_Dev::fetch_SetElement_func(Type type, int dimensions) {
     // Following symbols correspond to public Android API functions.
     // The symbols will be resolved once the code compiles on the target
     // Android device.
+    //
+    // Assumption for the choice of the functions below is that
+    // when using vector type(width==4) you specified two coordinates,
+    // when using plain type(width==1) you specified three coordinates.
     std::string func_name;
-    debug(2) << "fetch_SetElement_func type.code=" << type.code << " type.width=" << type.width << "\n";
     switch (type.code) {
         case Type::TypeCode::UInt:
             switch (type.width) {
-                case 1: func_name = "_Z20rsSetElementAt_uchar13rs_allocationhjjj"; break;
-                case 4: func_name = "_Z21rsSetElementAt_uchar413rs_allocationDv4_hjj"; break;
+                case 1:
+                    switch(type.bytes()) {
+                        case 1: func_name = "_Z20rsSetElementAt_uchar13rs_allocationhjjj"; break;
+                        case 2:
+                            switch(dimensions) {
+                                case 2: func_name = "_Z20rsSetElementAt_short13rs_allocationsjj"; break;
+                                case 3: func_name = "_Z20rsSetElementAt_short13rs_allocationsjjj"; break;
+                            }
+                            break;
+                        case 4:
+                            switch(dimensions) {
+                                case 2: func_name = "_Z18rsSetElementAt_int13rs_allocationijj"; break;
+                                case 3: func_name = "_Z18rsSetElementAt_int13rs_allocationijjj"; break;
+                            }
+                            break;
+                    }
+                    break;
+                case 4:
+                    switch(type.bytes()) {
+                        case 1: func_name = "_Z21rsSetElementAt_uchar413rs_allocationDv4_hjj"; break;
+                        case 2: func_name = "_Z21rsSetElementAt_short413rs_allocationDv4_sjj"; break;
+                        case 4: func_name = "_Z19rsSetElementAt_int413rs_allocationDv4_ijj"; break;
+                    }
+                    break;
             }
             break;
         case Type::TypeCode::Float:
             switch (type.width) {
-                case 1: func_name = "_Z20rsSetElementAt_float13rs_allocationfjjj"; break;
+                case 1:
+                    switch(dimensions) {
+                        case 2: func_name = "_Z20rsSetElementAt_float13rs_allocationfjj"; break;
+                        case 3: func_name = "_Z20rsSetElementAt_float13rs_allocationfjjj"; break;
+                    }
+                    break;
                 case 4: func_name = "_Z21rsSetElementAt_float413rs_allocationDv4_fjj"; break;
             }
             break;
@@ -394,17 +455,18 @@ llvm::Function *CodeGen_Renderscript_Dev::fetch_SetElement_func(Type type) {
     }
     internal_assert(func_name != "") << "Renderscript does not support type " << type << ", type.code=" << type.code << ", type.width=" << type.width << "\n";
     llvm::Function *func = module->getFunction(func_name);
+    debug(2) << "fetch_SetElement_func type.code=" << type.code << " type.width=" << type.width << " type.bytes=" << type.bytes() << " func_name:" << func_name << " func:" << func << "\n";
     internal_assert(func) << "Cant' find " << func_name << "function\n";
     return func;
 }
 
 vector<Value *> CodeGen_Renderscript_Dev::add_x_y_c_args(Expr name, Expr x, Expr y,
-                                               Expr c) {
+                                               const Expr *c) {
     vector<Value *> args;
     const Broadcast *b_name = name.as<Broadcast>();
     const Broadcast *b_x = x.as<Broadcast>();
     const Broadcast *b_y = y.as<Broadcast>();
-    const Ramp *ramp_c = c.as<Ramp>();
+    const Ramp *ramp_c = c != NULL? c->as<Ramp>(): NULL;
     if (b_name != NULL && b_x != NULL && b_y != NULL && ramp_c != NULL) {
         // vectorized over c, use x and y to retrieve 4-byte RGBA chunk.
         const IntImm *stride = ramp_c->stride.IRHandle::as<IntImm>();
@@ -423,7 +485,9 @@ vector<Value *> CodeGen_Renderscript_Dev::add_x_y_c_args(Expr name, Expr x, Expr
         args.push_back(sym_get(name.as<StringImm>()->value));
         args.push_back(codegen(x));
         args.push_back(codegen(y));
-        args.push_back(codegen(c));
+        if (c != NULL) {
+            args.push_back(codegen(*c));
+        }
     }
     return args;
 }
@@ -433,25 +497,29 @@ void CodeGen_Renderscript_Dev::visit(const Call *op) {
         if (op->name == Call::image_load || op->name == Call::image_store) {
             //
             // image_load(<image name>, <buffer>, <x>, <x-extent>, <y>,
-            // <y-extent>, <c>, <c-extent>)
+            // <y-extent>, [<c>, <c-extent>])
             // or
-            // image_store(<image name>, <buffer>, <x>, <y>, <c>, <value>)
+            // image_store(<image name>, <buffer>, <x>, <y>, [<c>,] <value>)
             //
             const int index_name = 0;
-            const int index_x = op->name == Call::image_load ? 2 : 2;
+            const int index_x = 2;
             const int index_y = op->name == Call::image_load ? 4 : 3;
-            const int index_c = op->name == Call::image_load ? 6 : 4;
+            const bool has_c = op->args.size() > (op->name == Call::image_load? 7: 5);
+            const int index_c = has_c? (op->name == Call::image_load ? 6 : 4): -1;
             vector<Value *> args =
-                add_x_y_c_args(op->args[index_name], op->args[index_x],
-                               op->args[index_y], op->args[index_c]);
+                add_x_y_c_args(op->args[index_name],
+                               op->args[index_x],
+                               op->args[index_y],
+                               index_c >= 0? &op->args[index_c]: NULL);
 
             if (op->name == Call::image_store) {
-                args.insert(args.begin() + 1, codegen(op->args[5]));
+                args.insert(args.begin() + 1, codegen(op->args[has_c? 5: 4]));
             }
 
             debug(2) << "Generating " << op->type.width
-                     << "byte-wide call with " << args.size() << " args:\n";
-            if (debug::debug_level >= 2) {
+                     << "byte-wide has_c=" << has_c << " call with " << args.size() << " args:\n";
+
+           if (debug::debug_level >= 2) {
                 int i = 1;
                 for (Value *arg : args) {
                     debug(2) << " #" << i++ << ":";
@@ -461,8 +529,8 @@ void CodeGen_Renderscript_Dev::visit(const Call *op) {
             }
 
             llvm::Function *func = op->name == Call::image_load
-                                       ? fetch_GetElement_func(op->type)
-                                       : fetch_SetElement_func(op->type);
+                                       ? fetch_GetElement_func(op->type, has_c? 3: 2)
+                                       : fetch_SetElement_func(op->type, has_c? 3: 2);
             value = builder->CreateCall(func, args);
             return;
         }

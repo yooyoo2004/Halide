@@ -1195,6 +1195,7 @@ public:
      * individual output pixels in parallel) and vectorization over 'c'
      * (since GLSL/RS implicitly vectorizes the color channel). */
     EXPORT Func &shader(Var x, Var y, Var c, DeviceAPI device_api);
+    EXPORT Func &shader(Var x, Var y, DeviceAPI device_api);
 
     /** Schedule for execution as GLSL kernel. */
     EXPORT Func &glsl(Var x, Var y, Var c);

@@ -74,10 +74,9 @@ protected:
      * parameter name. */
     std::string params_mapping(const std::string &name);
 
-    llvm::Function *fetch_GetElement_func(Type type);
-    llvm::Function *fetch_SetElement_func(Type type);
-    std::vector<llvm::Value *> add_x_y_c_args(Expr name, Expr x, Expr y,
-                                              Expr c);
+    llvm::Function *fetch_GetElement_func(Type type, int dimensions);
+    llvm::Function *fetch_SetElement_func(Type type, int dimensions);
+    std::vector<llvm::Value *> add_x_y_c_args(Expr name, Expr x, Expr y, const Expr *c);
 private:
     // Metadata records keep track of all Renderscript kernels.
     llvm::NamedMDNode *rs_export_foreach_name;

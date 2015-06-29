@@ -769,11 +769,8 @@ WEAK int halide_renderscript_device_release(void *user_context) {
 
     // Only destroy the context if we own it
     if (ctx.mContext == context) {
-        debug(user_context) << "    non-implemented RS CtxDestroy " << context
-                            << "\n";
-        // err = cuCtxDestroy(context);
-        // halide_assert(user_context, err == CUDA_SUCCESS || err ==
-        // CUDA_ERROR_DEINITIALIZED);
+        debug(user_context) << "    Destroyed RS context " << context << "\n";
+        Context::dispatch->ContextDestroy(context);
         context = NULL;
     }
 
@@ -839,8 +836,9 @@ WEAK int halide_renderscript_device_malloc(void *user_context, buffer_t *buf) {
 
     void *typeID = NULL;
     //
-    //  Support two element types:
+    //  Support three element types:
     //  - single unsigned 8-bit;
+    //  - two-byte unsigned int;
     //  - 32-bit float;
     //
     //  Support two types of buffers:
@@ -853,6 +851,9 @@ WEAK int halide_renderscript_device_malloc(void *user_context, buffer_t *buf) {
     switch(buf->elem_size) {
         case 1:
             datatype = RS_TYPE_UNSIGNED_8;
+            break;
+        case 2:
+            datatype = RS_TYPE_UNSIGNED_16;
             break;
         case 4:
             datatype = RS_TYPE_FLOAT_32;
@@ -927,13 +928,13 @@ WEAK int halide_renderscript_copy_to_device(void *user_context, buffer_t *buf) {
 
     halide_assert(user_context, buf->host && buf->dev);
 
-    if (is_interleaved_rgba_buffer_t(buf)) {
+    if (is_interleaved_rgba_buffer_t(buf) || (buf->extent[2] == 0)) {
         Context::dispatch->Allocation2DData(
             ctx.mContext, (void *)halide_get_device_handle(buf->dev), 0 /*xoff*/,
             0 /*yoff*/, 0 /*mSelectedLOD*/, RS_ALLOCATION_CUBEMAP_FACE_POSITIVE_X,
             buf->extent[0] /*w*/, buf->extent[1] /*h*/, buf->host,
-            buf->extent[0] * buf->extent[1] * buf->extent[2] * buf->elem_size,
-            buf->extent[0] * buf->extent[2] * buf->elem_size); /* hosts' stride */
+            buf->extent[0] * buf->extent[1] * max(1, buf->extent[2]) * buf->elem_size,
+            buf->extent[0] * max(1, buf->extent[2]) * buf->elem_size); /* hosts' stride */
     } else {
         Context::dispatch->Allocation3DData(
             ctx.mContext, (void *)halide_get_device_handle(buf->dev), 0 /*xoff*/,
@@ -990,16 +991,16 @@ WEAK int halide_renderscript_copy_to_host(void *user_context, buffer_t *buf) {
 
     debug(user_context) << "AllocationSyncAll done\n";
 
-    if (is_interleaved_rgba_buffer_t(buf)) {
+    if (is_interleaved_rgba_buffer_t(buf) || (buf->extent[2] == 0)) {
         halide_assert(user_context, Context::dispatch->Allocation2DRead != NULL);
         Context::dispatch->Allocation2DRead(
             ctx.mContext, (void *)halide_get_device_handle(buf->dev), 0 /*xoff*/,
             0 /*yoff*/, 0 /*mSelectedLOD*/, RS_ALLOCATION_CUBEMAP_FACE_POSITIVE_X,
             buf->extent[0] /*w*/, buf->extent[1] /*h*/, buf->host,
-            buf->extent[0] * buf->extent[1] * buf->extent[2] * buf->elem_size /* byte size */,
-            buf->extent[0] * buf->extent[2] * buf->elem_size /* hosts' stride */);
+            buf->extent[0] * buf->extent[1] * max(1, buf->extent[2]) * buf->elem_size /* byte size */,
+            buf->extent[0] * max(1, buf->extent[2]) * buf->elem_size /* hosts' stride */);
     } else {
-        debug(user_context) << "staring Allocation3DRead("
+        debug(user_context) << "Starting Allocation3DRead("
             << (void*)Context::dispatch->Allocation3DRead
             << ")(w=" << buf->extent[0]
             << " h=" << buf->extent[1]
@@ -1136,7 +1137,7 @@ WEAK int halide_renderscript_run(void *user_context, void *state_ptr,
     Context::dispatch->ScriptForEach(
         ctx.mContext, module,
         slot,  // slot corresponding to entry point
-        (void *)halide_get_device_handle(input_arg),  // in_id
+        NULL, //(void *)halide_get_device_handle(input_arg),  // in_id
         (void *)halide_get_device_handle(output_arg),  // out_id
         NULL,  // usr
         0,  // usrLen

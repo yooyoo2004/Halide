@@ -28,19 +28,31 @@ private:
 
         internal_assert(provide->values.size() == 1)
             << "Image currently only supports single-valued stores.\n";
-        user_assert(provide->args.size() == 3)
-            << "Image stores require three coordinates.\n";
+        user_assert(provide->args.size() == 2 || provide->args.size() == 3)
+            << "Image stores require either two or three coordinates.\n";
 
         // Create image_store("name", name.buffer, x, y, c, value)
         // intrinsic.
         Expr value_arg = mutate(provide->values[0]);
+
         vector<Expr> args = {
             provide->name,
-            Variable::make(Handle(), provide->name + ".buffer"),
-            provide->args[0],
-            provide->args[1],
-            provide->args[2],
-            value_arg};
+            Variable::make(Handle(), provide->name + ".buffer")
+        };
+
+        for (size_t i = 0; i < provide->args.size(); i++) {
+            string d = std::to_string(i);
+            string min_name = provide->name + ".min." + d;
+            string min_name_constrained = min_name + ".constrained";
+            if (scope.contains(min_name_constrained)) {
+                min_name = min_name_constrained;
+            }
+
+            Expr min = Variable::make(Int(32), min_name);
+            args.push_back(mutate(provide->args[i]) - min);
+        }
+
+        args.push_back(value_arg);
 
         stmt = Evaluate::make(Call::make(value_arg.type(),
                                          Call::image_store,
@@ -63,9 +75,9 @@ private:
         vector<Expr> padded_call_args = call->args;
         // Check to see if we are reading from a one or two dimension function
         // and pad to three dimensions.
-        while (padded_call_args.size() < 3) {
-            padded_call_args.push_back(IntImm::make(0));
-        }
+        // while (padded_call_args.size() < 3) {
+        //     padded_call_args.push_back(IntImm::make(0));
+        // }
 
         // Create image_load("name", name.buffer, x, x_extent, y, y_extent, ...).
         // Extents can be used by successive passes. OpenGL, for example, uses them

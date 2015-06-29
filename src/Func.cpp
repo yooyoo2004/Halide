@@ -1053,6 +1053,12 @@ Func &Func::shader(Var x, Var y, Var c, DeviceAPI device_api) {
     return *this;
 }
 
+Func &Func::shader(Var x, Var y, DeviceAPI device_api) {
+    invalidate_cache();
+    Stage(func.schedule(), name()).gpu_blocks(x, y, device_api);
+    return *this;
+}
+
 Func &Func::glsl(Var x, Var y, Var c) {
     return shader(x, y, c, DeviceAPI::GLSL).vectorize(c);
 }
