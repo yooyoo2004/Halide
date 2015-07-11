@@ -12,7 +12,7 @@
 #include "LLVM_Headers.h"
 #include "LLVM_Runtime_Linker.h"
 
-shnamespace Halide {
+namespace Halide {
 namespace Internal {
 
 using std::vector;
