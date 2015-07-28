@@ -271,6 +271,17 @@ Expr Load::make(Type type, std::string name, Expr index, Buffer image, Parameter
     return node;
 }
 
+Expr Load::make(Type type, std::string name, Expr index) {
+    internal_assert(index.defined()) << "Load of undefined\n";
+    internal_assert(type.width == index.type().width) << "Vector width of Load must match vector width of index\n";
+
+    Load *node = new Load;
+    node->type = type;
+    node->name = name;
+    node->index = index;
+    return node;
+}
+
 Expr Ramp::make(Expr base, Expr stride, int width) {
     internal_assert(base.defined()) << "Ramp of undefined\n";
     internal_assert(stride.defined()) << "Ramp of undefined\n";

@@ -171,6 +171,7 @@ struct Load : public ExprNode<Load> {
     Parameter param;
 
     EXPORT static Expr make(Type type, std::string name, Expr index, Buffer image, Parameter param);
+    EXPORT static Expr make(Type type, std::string name, Expr index);
 };
 
 /** A linear ramp vector node. This is vector with 'width' elements,
