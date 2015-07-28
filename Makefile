@@ -293,6 +293,7 @@ SOURCE_FILES = \
   StmtToHtml.cpp \
   StorageFlattening.cpp \
   StorageFolding.cpp \
+  StoreForwarding.cpp \
   Substitute.cpp \
   Target.cpp \
   Tracing.cpp \
@@ -413,6 +414,7 @@ HEADER_FILES = \
   StmtToHtml.h \
   StorageFlattening.h \
   StorageFolding.h \
+  StoreForwarding.h \
   Substitute.h \
   Target.h \
   Tracing.h \

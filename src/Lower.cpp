@@ -39,6 +39,7 @@
 #include "Simplify.h"
 #include "StorageFlattening.h"
 #include "StorageFolding.h"
+#include "StoreForwarding.h"
 #include "Substitute.h"
 #include "Tracing.h"
 #include "UnifyDuplicateLets.h"
@@ -205,6 +206,10 @@ Stmt lower(const vector<Function> &outputs, const string &pipeline_name, const T
 
     debug(1) << "Simplifying...\n";
     s = common_subexpression_elimination(s);
+
+    debug(1) << "Forwarding stores...\n";
+    s = forward_stores(s, outputs);
+    debug(2) << "Lowering after store forwarding:\n" << s << "\n\n";
 
     if (t.has_feature(Target::OpenGL)) {
         debug(1) << "Detecting varying attributes...\n";
