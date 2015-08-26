@@ -253,6 +253,7 @@ set(HEADER_FILES
   LLVM_Output.h
   LLVM_Runtime_Linker.h
   Lambda.h
+  LiftAllocations.h
   Lerp.h
   Lower.h
   MainPage.h
@@ -393,6 +394,7 @@ add_library(Halide ${HALIDE_LIBRARY_TYPE}
   JITModule.cpp
   LLVM_Output.cpp
   LLVM_Runtime_Linker.cpp
+  LiftAllocations.cpp
   Lerp.cpp
   Lower.cpp
   MatlabWrapper.cpp

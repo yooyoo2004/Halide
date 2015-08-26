@@ -25,6 +25,7 @@
 #include "IRMutator.h"
 #include "IROperator.h"
 #include "IRPrinter.h"
+#include "LiftAllocations.h"
 #include "Memoization.h"
 #include "PartitionLoops.h"
 #include "Profiling.h"
@@ -217,6 +218,10 @@ Stmt lower(const vector<Function> &outputs, const string &pipeline_name, const T
     s = rewrite_interleavings(s);
     s = simplify(s);
     debug(2) << "Lowering after rewriting vector interleavings:\n" << s << "\n\n";
+
+    debug(1) << "Lifting allocations out of loops...\n";
+    s = lift_allocations(s);
+    debug(2) << "Lowering after lifting allocations:\n" << s << "\n\n";
 
     debug(1) << "Partitioning loops to simplify boundary conditions...\n";
     s = partition_loops(s);

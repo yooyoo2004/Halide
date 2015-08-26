@@ -274,6 +274,7 @@ SOURCE_FILES = \
   IRPrinter.cpp \
   IRVisitor.cpp \
   JITModule.cpp \
+  LiftAllocations.cpp \
   Lerp.cpp \
   LLVM_Output.cpp \
   LLVM_Runtime_Linker.cpp \
@@ -397,6 +398,7 @@ HEADER_FILES = \
   IRVisitor.h \
   JITModule.h \
   Lambda.h \
+  LiftAllocations.h \
   Lerp.h \
   LLVM_Output.h \
   LLVM_Runtime_Linker.h \
