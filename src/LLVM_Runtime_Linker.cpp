@@ -46,7 +46,7 @@ llvm::Module *parse_bitcode_file(llvm::StringRef buf, llvm::LLVMContext *context
     }
 
 #define DECLARE_NO_INITMOD(mod)                                         \
-    llvm::Module *get_initmod_##mod(llvm::LLVMContext *, bool) {             \
+    llvm::Module *get_initmod_##mod(llvm::LLVMContext *, bool, bool) { \
         user_error << "Halide was compiled without support for this target\n"; \
         return NULL;                                                    \
     }                                                                   \
@@ -90,6 +90,7 @@ DECLARE_CPP_INITMOD(osx_opengl_context)
 DECLARE_CPP_INITMOD(opencl)
 DECLARE_CPP_INITMOD(windows_opencl)
 DECLARE_CPP_INITMOD(opengl)
+DECLARE_CPP_INITMOD(openglcompute)
 DECLARE_CPP_INITMOD(osx_host_cpu_count)
 DECLARE_CPP_INITMOD(posix_allocator)
 DECLARE_CPP_INITMOD(posix_clock)
@@ -121,6 +122,23 @@ DECLARE_CPP_INITMOD(renderscript)
 DECLARE_CPP_INITMOD(profiler)
 DECLARE_CPP_INITMOD(profiler_inlined)
 DECLARE_CPP_INITMOD(runtime_api)
+#ifdef WITH_METAL
+DECLARE_CPP_INITMOD(metal)
+#ifdef WITH_ARM
+DECLARE_CPP_INITMOD(metal_objc_arm)
+#else
+DECLARE_NO_INITMOD(metal_objc_arm)
+#endif
+#ifdef WITH_X86
+DECLARE_CPP_INITMOD(metal_objc_x86)
+#else
+DECLARE_NO_INITMOD(metal_objc_x86)
+#endif
+#else
+DECLARE_NO_INITMOD(metal)
+DECLARE_NO_INITMOD(metal_objc_arm)
+DECLARE_NO_INITMOD(metal_objc_x86)
+#endif
 
 #ifdef WITH_ARM
 DECLARE_LL_INITMOD(arm)
@@ -165,7 +183,7 @@ llvm::DataLayout get_data_layout_for_target(Target target) {
     if (target.arch == Target::X86) {
         if (target.bits == 32) {
             if (target.os == Target::OSX) {
-                return llvm::DataLayout("e-m:o-p:32:32-f64:32:64-f80:32-n8:16:32-S128");
+                return llvm::DataLayout("e-m:o-p:32:32-f64:32:64-f80:128-n8:16:32-S128");
             } else if (target.os == Target::Windows && !target.has_feature(Target::JIT)) {
                 #if LLVM_VERSION >= 37
                 return llvm::DataLayout("e-m:x-p:32:32-i64:64-f80:32-n8:16:32-a:0:32-S32");
@@ -557,7 +575,11 @@ llvm::Module *get_initial_module_for_target(Target t, llvm::LLVMContext *c, bool
         if (module_type != ModuleJITInlined && module_type != ModuleAOTNoRuntime) {
             // OS-dependent modules
             if (t.os == Target::Linux) {
-                modules.push_back(get_initmod_linux_clock(c, bits_64, debug));
+                if (t.arch == Target::X86) {
+                    modules.push_back(get_initmod_linux_clock(c, bits_64, debug));
+                } else {
+                    modules.push_back(get_initmod_posix_clock(c, bits_64, debug));
+                }
                 modules.push_back(get_initmod_posix_io(c, bits_64, debug));
                 modules.push_back(get_initmod_linux_host_cpu_count(c, bits_64, debug));
                 modules.push_back(get_initmod_posix_thread_pool(c, bits_64, debug));
@@ -568,7 +590,11 @@ llvm::Module *get_initial_module_for_target(Target t, llvm::LLVMContext *c, bool
                 modules.push_back(get_initmod_gcd_thread_pool(c, bits_64, debug));
                 modules.push_back(get_initmod_osx_get_symbol(c, bits_64, debug));
             } else if (t.os == Target::Android) {
-                modules.push_back(get_initmod_android_clock(c, bits_64, debug));
+                if (t.arch == Target::ARM) {
+                    modules.push_back(get_initmod_android_clock(c, bits_64, debug));
+                } else {
+                    modules.push_back(get_initmod_posix_clock(c, bits_64, debug));
+                }
                 modules.push_back(get_initmod_android_io(c, bits_64, debug));
                 modules.push_back(get_initmod_android_host_cpu_count(c, bits_64, debug));
                 modules.push_back(get_initmod_posix_thread_pool(c, bits_64, debug));
@@ -683,8 +709,30 @@ llvm::Module *get_initial_module_for_target(Target t, llvm::LLVMContext *c, bool
             } else {
                 // You're on your own to provide definitions of halide_opengl_get_proc_address and halide_opengl_create_context
             }
+        } else if (t.has_feature(Target::OpenGLCompute)) {
+            modules.push_back(get_initmod_openglcompute(c, bits_64, debug));
+            if (t.os == Target::Android) {
+                // Only platform that supports OpenGL Compute for now.
+                modules.push_back(get_initmod_android_opengl_context(c, bits_64, debug));
+            } else if (t.os == Target::Linux) {
+                modules.push_back(get_initmod_linux_opengl_context(c, bits_64, debug));
+            } else if (t.os == Target::OSX) {
+                modules.push_back(get_initmod_osx_opengl_context(c, bits_64, debug));
+            } else {
+                // You're on your own to provide definitions of halide_opengl_get_proc_address and halide_opengl_create_context
+            }
+
         } else if (t.has_feature(Target::Renderscript)) {
             modules.push_back(get_initmod_renderscript(c, bits_64, debug));
+        } else if (t.has_feature(Target::Metal)) {
+            modules.push_back(get_initmod_metal(c, bits_64, debug));
+            if (t.arch == Target::ARM) {
+                modules.push_back(get_initmod_metal_objc_arm(c, bits_64, debug));
+            } else if (t.arch == Target::X86) {
+                modules.push_back(get_initmod_metal_objc_x86(c, bits_64, debug));
+            } else {
+                user_error << "Metal can only be used on ARM or X86 architectures.\n";
+            }
         }
     }
 

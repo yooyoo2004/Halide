@@ -75,7 +75,11 @@ public:
     /*
     Expr mutate(Expr e) {
         Expr new_e = IRMutator::mutate(e);
-        debug(0) << e << " -> " << new_e << "\n";
+        if (!new_e.same_as(e)) {
+            debug(1)
+                << "Before: " << e << "\n"
+                << "After:  " << new_e << "\n";
+        }
         return new_e;
     }
     using IRMutator::mutate;
@@ -169,6 +173,9 @@ private:
             expr = value;
         } else if (op->type == Int(32) && const_float(value, &f)) {
             expr = IntImm::make((int)f);
+        } else if (Int(32).can_represent(op->type) && const_float(value, &f)) {
+            // u16(123.25f) -> u16(123)
+            expr = Cast::make(op->type, IntImm::make((int)f));
         } else if (op->type == Float(32) && const_int(value, &i)) {
             expr = FloatImm::make((float)i);
         } else if (cast && op->type.code == cast->type.code && op->type.bits < cast->type.bits) {
@@ -2086,14 +2093,20 @@ private:
             Expr a = mutate(op->args[0]);
             Type ta = a.type();
             int ia = 0;
-            if (ta.is_int() && const_castint(a, &ia) && ia != ta.imin()) {
-                if (ia < 0) {
+            float fa = 0;
+            if (ta.is_int() && const_castint(a, &ia)) {
+                if (ia < 0 && ia != Int(32).imin()) {
                     ia = -ia;
                 }
                 expr = Cast::make(op->type, ia);
             } else if (ta.is_uint()) {
                 // abs(uint) is a no-op.
                 expr = a;
+            } else if (const_float(a, &fa)) {
+                if (fa < 0) {
+                    fa = -fa;
+                }
+                expr = fa;
             } else if (a.same_as(op->args[0])) {
                 expr = op;
             } else {
@@ -2456,8 +2469,8 @@ private:
 
         const AssertStmt *a = stmt.as<AssertStmt>();
         if (a && is_zero(a->condition)) {
-            user_error << "This pipeline is guaranteed to fail an assertion at runtime: \n"
-                       << stmt << "\n";
+            user_warning << "This pipeline is guaranteed to fail an assertion at runtime: \n"
+                         << stmt << "\n";
         } else if (a && is_one(a->condition)) {
             stmt = Evaluate::make(0);
         }
@@ -2740,6 +2753,8 @@ void simplify_test() {
     check(cast(UInt(16), 65) == cast(UInt(16), 66), const_false());
     check(cast(UInt(16), -1) < cast(UInt(16), 65535), const_false());
     check(cast(UInt(16), 65) < cast(UInt(16), 66), const_true());
+    check(cast(UInt(16), 123.4f), cast(UInt(16), 123));
+    check(cast(Float(32), cast(UInt(16), 123456.0f)), 57920.0f);
     // Specific checks for 32 bit unsigned expressions - ensure simplifications are actually unsigned.
     // 4000000000 (4 billion) is less than 2^32 but more than 2^31.  As an int, it is negative.
     check(cast(UInt(32), (int) 4000000000UL) + cast(UInt(32), 5), cast(UInt(32), (int) 4000000005UL));
@@ -2751,6 +2766,8 @@ void simplify_test() {
     check(max(cast(UInt(32), (int) 4000000023UL) , cast(UInt(32), 1000)), cast(UInt(32), (int) 4000000023UL));
     check(cast(UInt(32), (int) 4000000023UL) < cast(UInt(32), 1000), const_false());
     check(cast(UInt(32), (int) 4000000023UL) == cast(UInt(32), 1000), const_false());
+
+
 
     // Check some specific expressions involving div and mod
     check(Expr(23) / 4, Expr(5));
