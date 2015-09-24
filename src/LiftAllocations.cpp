@@ -33,11 +33,14 @@ private:
         found = true;
     }
 
-    // Don't lift past things with potential side effects.
-    void visit(const Evaluate *op) {
+    // Don't lift past for loops, this might increase the liftime of
+    // an allocation to overlap with other allocations, increasing
+    // peak memory usage.
+    void visit(const For *op) {
         found = true;
     }
 
+    // Don't lift past things with potential side effects.
     void visit(const Call *op) {
         if (op->call_type == Call::Extern) {
             found = true;
