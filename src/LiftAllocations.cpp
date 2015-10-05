@@ -263,40 +263,40 @@ private:
         Stmt body = mutate(loop->body);
 
         body = rewrap_if(body, outer, [&](Stmt i) {
-           debug(4) << "Trying to lift out of " << loop->name << "\n";
+            debug(4) << "Trying to lift out of " << loop->name << "\n";
 
-           const LetStmt *let = i.as<LetStmt>();
-           if (let) {
-               // If the let depends on the loop variable, we can't lift it any further.
-               if (let_depends_on(let, loop->name)) {
-                   debug(4) << "Not lifting let " << let->name << " because it depends on loop " << loop->name << "\n";
-                   return true;
-               }
+            const LetStmt *let = i.as<LetStmt>();
+            if (let) {
+                // If the let depends on the loop variable, we can't lift it any further.
+                if (let_depends_on(let, loop->name)) {
+                    debug(4) << "Not lifting let " << let->name << " because it depends on loop " << loop->name << "\n";
+                    return true;
+                }
 
-               // This let can be lifted outside this loop.
-               debug(4) << "Lifting let " << let->name << " with value " << let->value << " out of " << loop->name << "\n";
-               return false;
-           }
+                // This let can be lifted outside this loop.
+                debug(4) << "Lifting let " << let->name << " with value " << let->value << " out of " << loop->name << "\n";
+                return false;
+            }
 
-           const Allocate *alloc = i.as<Allocate>();
-           if (alloc) {
-               // If the loop is parallel, we can't lift the allocation out of it.
-               if (loop->for_type == ForType::Parallel) {
-                   debug(4) << "Not lifting allocation " << alloc->name << " out of parallel loop " << loop->name << "\n";
-                   return true;
-               }
+            const Allocate *alloc = i.as<Allocate>();
+            if (alloc) {
+                // If the loop is parallel, we can't lift the allocation out of it.
+                if (loop->for_type == ForType::Parallel) {
+                    debug(4) << "Not lifting allocation " << alloc->name << " out of parallel loop " << loop->name << "\n";
+                    return true;
+                }
 
-               if (allocate_depends_on(alloc, loop->name)) {
-                   debug(4) << "Not lifting allocation " << alloc->name << " because it depends on loop " << loop->name << "\n";
-                   return true;
-               }
+                if (allocate_depends_on(alloc, loop->name)) {
+                    debug(4) << "Not lifting allocation " << alloc->name << " because it depends on loop " << loop->name << "\n";
+                    return true;
+                }
 
-               // This allocation can be lifted outside this loop.
-               debug(4) << "Lifting allocation " << alloc->name << " out of loop " << loop->name << "\n";
-               return false;
-           }
+                // This allocation can be lifted outside this loop.
+                debug(4) << "Lifting allocation " << alloc->name << " out of loop " << loop->name << "\n";
+                return false;
+            }
 
-           return false;
+            return false;
         });
 
         if (!body.same_as(loop->body)) {
