@@ -119,7 +119,7 @@ private:
     string loop_var;
     Scope<Expr> bound_vars;
     Scope<int> free_vars;
-    Scope<int> inner_loop_vars;
+    Scope<Interval> inner_loop_vars;
 
     bool tight;
 
@@ -335,39 +335,53 @@ private:
             return cond;
         }
 
-        // Conditions in terms of an inner loop var can't be pulled outside
-        if (expr_uses_vars(cond, inner_loop_vars)) {
-            return cond;
-        }
-
         // Peel off lets.
         vector<pair<string, Expr>> new_lets;
         while (const Let *let = solved.as<Let>()) {
-            new_lets.push_back(make_pair(let->name, let->value) );
+            new_lets.push_back(make_pair(let->name, let->value));
             solved = let->body;
         }
-
 
         bool success = false;
         if (const LT *lt = solved.as<LT>()) {
             if (is_loop_var(lt->a)) {
-                max_vals.push_back(lt->b);
-                success = true;
+                // Take the max over any inner loop vars
+                Interval rhs = bounds_of_expr_in_scope(lt->b, inner_loop_vars);
+                if (rhs.max.defined()) {
+                    tight &= rhs.min.same_as(rhs.max);
+                    max_vals.push_back(rhs.max);
+                    success = true;
+                }
             }
         } else if (const LE *le = solved.as<LE>()) {
             if (is_loop_var(le->a)) {
-                max_vals.push_back(le->b + 1);
-                success = true;
+                // Take the max over any inner loop vars
+                Interval rhs = bounds_of_expr_in_scope(le->b + 1, inner_loop_vars);
+                if (rhs.max.defined()) {
+                    tight &= rhs.min.same_as(rhs.max);
+                    max_vals.push_back(rhs.max);
+                    success = true;
+                }
             }
         } else if (const GE *ge = solved.as<GE>()) {
             if (is_loop_var(ge->a)) {
-                min_vals.push_back(ge->b);
-                success = true;
+                // Take the min over any inner loop vars
+                Interval rhs = bounds_of_expr_in_scope(ge->b, inner_loop_vars);
+                if (rhs.min.defined()) {
+                    tight &= rhs.min.same_as(rhs.max);
+                    min_vals.push_back(rhs.min);
+                    success = true;
+                }
             }
         } else if (const GT *gt = solved.as<GT>()) {
             if (is_loop_var(gt->a)) {
-                min_vals.push_back(gt->b + 1);
-                success = true;
+                // Take the min over any inner loop vars
+                Interval rhs = bounds_of_expr_in_scope(gt->a, inner_loop_vars);
+                if (rhs.min.defined()) {
+                    tight &= rhs.min.same_as(rhs.max);
+                    min_vals.push_back(rhs.min);
+                    success = true;
+                }
             }
         }
 
@@ -557,8 +571,14 @@ private:
         Expr body;
 
         bound_vars.push(op->name, value);
+        if (value.type().is_scalar()) {
+            inner_loop_vars.push(op->name, bounds_of_expr_in_scope(value, inner_loop_vars));
+        }
         body = mutate(op->body);
         bound_vars.pop(op->name);
+        if (value.type().is_scalar()) {
+            inner_loop_vars.pop(op->name);
+        }
 
         if (value.same_as(op->value) && body.same_as(op->body)) {
             expr = op;
@@ -572,8 +592,14 @@ private:
         Stmt body;
 
         bound_vars.push(op->name, value);
+        if (value.type().is_scalar()) {
+            inner_loop_vars.push(op->name, bounds_of_expr_in_scope(value, inner_loop_vars));
+        }
         body = mutate(op->body);
         bound_vars.pop(op->name);
+        if (value.type().is_scalar()) {
+            inner_loop_vars.pop(op->name);
+        }
 
         if (value.same_as(op->value) && body.same_as(op->body)) {
             stmt = op;
@@ -585,7 +611,9 @@ private:
     void visit(const For *op) {
         Expr min = mutate(op->min);
         Expr extent = mutate(op->extent);
-        inner_loop_vars.push(op->name, 0);
+        Expr min_val = bounds_of_expr_in_scope(min, inner_loop_vars).min;
+        Expr max_val = bounds_of_expr_in_scope(min_val + extent - 1, inner_loop_vars).max;
+        inner_loop_vars.push(op->name, Interval(min_val, max_val));
         Stmt body = mutate(op->body);
         inner_loop_vars.pop(op->name);
 
@@ -605,6 +633,9 @@ class PartitionLoops : public IRMutator {
 
     void visit(const For *op) {
 
+        Stmt body = op->body;
+
+        /*
         Stmt body = mutate(op->body);
 
         // We conservatively only apply this optimization at one loop
@@ -623,6 +654,7 @@ class PartitionLoops : public IRMutator {
                              op->for_type, op->device_api, body);
             return;
         }
+        */
 
         // We can't inject logic at the loop over gpu blocks, or in
         // between gpu thread loops.
@@ -673,6 +705,9 @@ class PartitionLoops : public IRMutator {
 
 
             debug(3) << "\nSimpler body: " << simpler_body << "\n";
+
+            // Recursively apply partitioning to the simpler body
+            simpler_body = mutate(simpler_body);
 
             Stmt new_loop;
 
@@ -738,11 +773,9 @@ class PartitionLoops : public IRMutator {
             new_loop = f.add_containing_lets(new_loop);
 
             stmt = new_loop;
-        } else if (body.same_as(op->body)) {
-            stmt = op;
         } else {
             stmt = For::make(op->name, op->min, op->extent,
-                             op->for_type, op->device_api, body);
+                             op->for_type, op->device_api, mutate(body));
         }
     }
 };
