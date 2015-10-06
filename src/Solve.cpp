@@ -44,10 +44,12 @@ public:
             Expr new_e = IRMutator::mutate(e);
             CacheEntry entry = {new_e, uses_var};
             cache[e] = entry;
+            debug(3) << "Rewrote " << e << " -> " << new_e << "\n";
             return new_e;
         } else {
             // Cache hit.
             uses_var = uses_var || iter->second.uses_var;
+            debug(3) << "Rewrote " << e << " -> " << iter->second.expr << "\n";
             return iter->second.expr;
         }
     }
