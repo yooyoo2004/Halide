@@ -106,16 +106,18 @@ int main(int argc, char **argv) {
         count_partitions(g, 2);
     }
 
-    // The slicing only applies to a single loop level - the
-    // innermost one where it can be applied. So adding a boundary
-    // condition to a 2D computation will produce 3 code paths, not 9.
+    // The slicing applies to every loop level starting from the
+    // outermost one, but only recursively simplifies the clean steady
+    // state. So adding a boundary condition to a 2D computation will
+    // produce 5 code paths for the top, bottom, left, right, and
+    // center of the image.
     {
         Var y;
         Func g;
         g(x, y) = x + y;
         g.compute_root();
         Func h = BoundaryConditions::mirror_image(g, 0, 10, 0, 10);
-        count_partitions(h, 3);
+        count_partitions(h, 5);
     }
 
     // If you split and also have a boundary condition, or have
@@ -190,24 +192,30 @@ int main(int argc, char **argv) {
     {
         Func g;
         Var y;
+
+        // Have an inner reduction loop that the comparisons depend on
+        // to make things harder.
+        RDom r(0, 5);
+
         // Make some nasty expressions to compare to.
-        Expr e[10];
+        Expr e[7];
         e[0] = y;
-        for (int i = 1; i < 6; i++) {
-            e[i] = e[i-1] * e[i-1] + y;
+        for (int i = 1; i < 7; i++) {
+            e[i] = e[i-1] * e[i-1] + y + r;
         }
         // Make a nasty condition that uses all of these.
         Expr nasty = cast<bool>(1);
-        for (int i = 0; i < 6; i++) {
+        for (int i = 0; i < 7; i++) {
             nasty = nasty && (x*(i+1) < e[i]);
         }
-        // Have an innermost loop over c to complicate things.
+
+        // Have an innermost loop over c to complicate things further.
         Var c;
-        g(c, x, y) = select(nasty, likely(10), c);
+        g(c, x, y) = sum(select(nasty, likely(10), c + r));
 
         // Check that it doesn't take the age of the world to compile,
         // and that it produces the right number of partitions.
-        count_partitions(g, 2);
+        count_partitions(g, 3);
 
         // Note: The loops above would be larger, but the above code
         // sails through Halide then triggers exponential behavior
