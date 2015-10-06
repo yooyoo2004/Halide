@@ -345,41 +345,44 @@ private:
         bool success = false;
         if (const LT *lt = solved.as<LT>()) {
             if (is_loop_var(lt->a)) {
-                // Take the max over any inner loop vars
+                // Take the min over any inner loop vars on the
+                // RHS. If the inequality holds for this smaller value
+                // then it holds for all possible values of the inner
+                // loop variable.
                 Interval rhs = bounds_of_expr_in_scope(lt->b, inner_loop_vars);
                 if (rhs.max.defined()) {
                     tight &= rhs.min.same_as(rhs.max);
-                    max_vals.push_back(rhs.max);
+                    max_vals.push_back(rhs.min);
                     success = true;
                 }
             }
         } else if (const LE *le = solved.as<LE>()) {
             if (is_loop_var(le->a)) {
-                // Take the max over any inner loop vars
+                // Take the min over any inner loop vars
                 Interval rhs = bounds_of_expr_in_scope(le->b + 1, inner_loop_vars);
                 if (rhs.max.defined()) {
                     tight &= rhs.min.same_as(rhs.max);
-                    max_vals.push_back(rhs.max);
+                    max_vals.push_back(rhs.min);
                     success = true;
                 }
             }
         } else if (const GE *ge = solved.as<GE>()) {
             if (is_loop_var(ge->a)) {
-                // Take the min over any inner loop vars
+                // Take the max over any inner loop vars
                 Interval rhs = bounds_of_expr_in_scope(ge->b, inner_loop_vars);
                 if (rhs.min.defined()) {
                     tight &= rhs.min.same_as(rhs.max);
-                    min_vals.push_back(rhs.min);
+                    min_vals.push_back(rhs.max);
                     success = true;
                 }
             }
         } else if (const GT *gt = solved.as<GT>()) {
             if (is_loop_var(gt->a)) {
-                // Take the min over any inner loop vars
-                Interval rhs = bounds_of_expr_in_scope(gt->a, inner_loop_vars);
+                // Take the max over any inner loop vars
+                Interval rhs = bounds_of_expr_in_scope(gt->b + 1, inner_loop_vars);
                 if (rhs.min.defined()) {
                     tight &= rhs.min.same_as(rhs.max);
-                    min_vals.push_back(rhs.min);
+                    min_vals.push_back(rhs.max);
                     success = true;
                 }
             }
