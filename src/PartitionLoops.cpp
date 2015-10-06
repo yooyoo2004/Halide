@@ -338,7 +338,16 @@ private:
         // Peel off lets.
         vector<pair<string, Expr>> new_lets;
         while (const Let *let = solved.as<Let>()) {
-            new_lets.push_back(make_pair(let->name, let->value));
+            Interval i = bounds_of_expr_in_scope(let->value, inner_loop_vars);
+            if (i.min.same_as(i.max)) {
+                new_lets.push_back(make_pair(let->name, i.min));
+            } else {
+                Expr min_var = Variable::make(let->value.type(), let->name + ".min");
+                Expr max_var = Variable::make(let->value.type(), let->name + ".max");
+                inner_loop_vars.push(let->name, Interval(min_var, max_var));
+                new_lets.push_back(make_pair(let->name + ".min", i.min));
+                new_lets.push_back(make_pair(let->name + ".max", i.max));
+            }
             solved = let->body;
         }
 
@@ -575,11 +584,17 @@ private:
 
         bound_vars.push(op->name, value);
         if (value.type().is_scalar()) {
-            inner_loop_vars.push(op->name, bounds_of_expr_in_scope(value, inner_loop_vars));
+            Interval i = bounds_of_expr_in_scope(value, inner_loop_vars);
+            bound_vars.push(op->name + ".min", i.min);
+            bound_vars.push(op->name + ".max", i.max);
+            inner_loop_vars.push(op->name, Interval(Variable::make(value.type(), op->name + ".min"),
+                                                    Variable::make(value.type(), op->name + ".max")));
         }
         body = mutate(op->body);
         bound_vars.pop(op->name);
         if (value.type().is_scalar()) {
+            bound_vars.pop(op->name + ".min");
+            bound_vars.pop(op->name + ".max");
             inner_loop_vars.pop(op->name);
         }
 
@@ -596,11 +611,17 @@ private:
 
         bound_vars.push(op->name, value);
         if (value.type().is_scalar()) {
-            inner_loop_vars.push(op->name, bounds_of_expr_in_scope(value, inner_loop_vars));
+            Interval i = bounds_of_expr_in_scope(value, inner_loop_vars);
+            bound_vars.push(op->name + ".min", i.min);
+            bound_vars.push(op->name + ".max", i.max);
+            inner_loop_vars.push(op->name, Interval(Variable::make(value.type(), op->name + ".min"),
+                                                    Variable::make(value.type(), op->name + ".max")));
         }
         body = mutate(op->body);
         bound_vars.pop(op->name);
         if (value.type().is_scalar()) {
+            bound_vars.pop(op->name + ".min");
+            bound_vars.pop(op->name + ".max");
             inner_loop_vars.pop(op->name);
         }
 
@@ -674,7 +695,10 @@ class PartitionLoops : public IRMutator {
         Expr max_steady = f.max_steady_val();
 
         if (min_steady.defined() || max_steady.defined()) {
-            debug(3) << "\nOld body: " << body << "\n";
+            debug(3) << "Partitioning loop over " << op->name << "\n"
+                     << "min_steady = " << min_steady << "\n"
+                     << "max_steady = " << max_steady << "\n"
+                     << "old body: " << body << "\n";
 
             // They're undefined if there's no prologue or epilogue.
             bool make_prologue = min_steady.defined();
