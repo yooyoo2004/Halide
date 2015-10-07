@@ -8,6 +8,8 @@ const int W = 3200, H = 2400;
 using namespace Halide;
 using namespace Halide::BoundaryConditions;
 
+Target target;
+
 struct Test {
     const char *name;
     Func f;
@@ -18,17 +20,24 @@ struct Test {
         Func g(name);
         Var x, y;
         g(x, y) = f(x - 1, y - 1) + f(x, y) + f(x + 1, y + 1);
-        g.vectorize(x, 4);
+        if (target.has_gpu_feature()) {
+            g.gpu_tile(x, y, 8, 8);
+        } else {
+            g.vectorize(x, 4);
+        }
         g.compile_jit();
 
         Image<float> out = g.realize(W, H);
 
-        // best of 10 x 30 runs.
-        time = benchmark(10, 30, [&]() {
-            g.realize(out);
+        // best of 10 x 10 runs.
+        time = benchmark(1, 1, [&]() {
+                for (int i = 0; i < 100; i++) {
+                    g.realize(Buffer(out));
+                }
+                g.realize(out);
         });
 
-        printf("%s: %f us\n", name, time * 1e6);
+        printf("%-20s: %f us\n", name, time * 1e6);
     }
 
     // Test a larger stencil using an RDom
@@ -37,21 +46,30 @@ struct Test {
         Var x, y;
         RDom r(-3, 7, -3, 7);
         g(x, y) = sum(f(x + r.x, y + r.y));
-        g.vectorize(x, 4);
+        if (target.has_gpu_feature()) {
+            g.gpu_tile(x, y, 8, 8);
+        } else {
+            g.vectorize(x, 4);
+        }
         g.compile_jit();
 
         Image<float> out = g.realize(W, H);
 
         // best of 5 x 5 runs.
-        time = benchmark(5, 5, [&]() {
-            g.realize(out);
+        time = benchmark(1, 1, [&]() {
+                for (int i = 0; i < 100; i++) {
+                    g.realize(Buffer(out));
+                }
+                g.realize(out);
         });
 
-        printf("%s: %f us\n", name, time * 1e6);
+        printf("%-20s: %f us\n", name, time * 1e6);
     }
 };
 
 int main(int argc, char **argv) {
+    target = get_jit_target_from_environment();
+
     ImageParam input(Float(32), 2);
     ImageParam padded_input(Float(32), 2);
 
@@ -70,12 +88,12 @@ int main(int argc, char **argv) {
 
     // Apply several different boundary conditions.
     Test tests[] = {
-        {"unbounded        ", lambda(x, y, padded_input(x+8, y+8)), 0.0},
+        {"unbounded", lambda(x, y, padded_input(x+8, y+8)), 0.0},
         {"constant_exterior", constant_exterior(input, 0.0f), 0.0},
-        {"repeat_edge      ", repeat_edge(input), 0.0},
-        {"repeat_image     ", repeat_image(input), 0.0},
-        {"mirror_image     ", mirror_image(input), 0.0},
-        {"mirror_interior  ", mirror_interior(input), 0.0},
+        {"repeat_edge", repeat_edge(input), 0.0},
+        {"repeat_image", repeat_image(input), 0.0},
+        {"mirror_image", mirror_image(input), 0.0},
+        {"mirror_interior", mirror_interior(input), 0.0},
         {NULL, Func(), 0.0}}; // Sentinel
 
     // Time each

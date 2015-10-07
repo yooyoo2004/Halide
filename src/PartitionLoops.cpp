@@ -9,6 +9,7 @@
 #include "ExprUsesVar.h"
 #include "Substitute.h"
 #include "CodeGen_GPU_Dev.h"
+#include "Var.h"
 
 namespace Halide {
 namespace Internal {
@@ -578,58 +579,44 @@ private:
         stmt = visit_select_or_if(op, op->then_case, op->else_case);
     }
 
-    void visit(const Let *op) {
+    template<typename LetOrLetStmt, typename StmtOrExpr>
+    StmtOrExpr visit_let(const LetOrLetStmt *op) {
         Expr value = mutate(op->value);
-        Expr body;
+        StmtOrExpr body;
 
+        bool pushed_bounds = false;
         bound_vars.push(op->name, value);
         if (value.type().is_scalar()) {
             Interval i = bounds_of_expr_in_scope(value, inner_loop_vars);
-            bound_vars.push(op->name + ".min", i.min);
-            bound_vars.push(op->name + ".max", i.max);
-            inner_loop_vars.push(op->name, Interval(Variable::make(value.type(), op->name + ".min"),
-                                                    Variable::make(value.type(), op->name + ".max")));
+            if (!i.min.same_as(i.max) || !i.min.same_as(value)) {
+                pushed_bounds = true;
+                bound_vars.push(op->name + ".min", i.min);
+                bound_vars.push(op->name + ".max", i.max);
+                inner_loop_vars.push(op->name, Interval(Variable::make(value.type(), op->name + ".min"),
+                                                        Variable::make(value.type(), op->name + ".max")));
+            }
         }
         body = mutate(op->body);
         bound_vars.pop(op->name);
-        if (value.type().is_scalar()) {
+        if (pushed_bounds) {
             bound_vars.pop(op->name + ".min");
             bound_vars.pop(op->name + ".max");
             inner_loop_vars.pop(op->name);
         }
 
         if (value.same_as(op->value) && body.same_as(op->body)) {
-            expr = op;
+            return op;
         } else {
-            expr = Let::make(op->name, value, body);
+            return LetOrLetStmt::make(op->name, value, body);
         }
     }
 
+    void visit(const Let *op) {
+        expr = visit_let<Let, Expr>(op);
+    }
+
     void visit(const LetStmt *op) {
-        Expr value = mutate(op->value);
-        Stmt body;
-
-        bound_vars.push(op->name, value);
-        if (value.type().is_scalar()) {
-            Interval i = bounds_of_expr_in_scope(value, inner_loop_vars);
-            bound_vars.push(op->name + ".min", i.min);
-            bound_vars.push(op->name + ".max", i.max);
-            inner_loop_vars.push(op->name, Interval(Variable::make(value.type(), op->name + ".min"),
-                                                    Variable::make(value.type(), op->name + ".max")));
-        }
-        body = mutate(op->body);
-        bound_vars.pop(op->name);
-        if (value.type().is_scalar()) {
-            bound_vars.pop(op->name + ".min");
-            bound_vars.pop(op->name + ".max");
-            inner_loop_vars.pop(op->name);
-        }
-
-        if (value.same_as(op->value) && body.same_as(op->body)) {
-            stmt = op;
-        } else {
-            stmt = LetStmt::make(op->name, value, body);
-        }
+        stmt = visit_let<LetStmt, Stmt>(op);
     }
 
     void visit(const For *op) {
@@ -658,35 +645,6 @@ class PartitionLoops : public IRMutator {
     void visit(const For *op) {
 
         Stmt body = op->body;
-
-        /*
-        Stmt body = mutate(op->body);
-
-        // We conservatively only apply this optimization at one loop
-        // level, which limits the expansion in code size to a factor
-        // of 3.  Comment out the check below to allow full expansion
-        // into 3^n cases for n loop levels.
-        //
-        // Another strategy is to not recursively call mutate on the
-        // body in the line above, but instead recursively call mutate
-        // only on simpler_body below. This results in a 2*n + 1
-        // expansion factor. Testing didn't reveal either of these
-        // strategies to be a performance win, so we'll just expand
-        // once.
-        if (!body.same_as(op->body)) {
-            stmt = For::make(op->name, op->min, op->extent,
-                             op->for_type, op->device_api, body);
-            return;
-        }
-        */
-
-        // We can't inject logic at the loop over gpu blocks, or in
-        // between gpu thread loops.
-        if (CodeGen_GPU_Dev::is_gpu_var(op->name)) {
-            stmt = For::make(op->name, op->min, op->extent,
-                             op->for_type, op->device_api, body);
-            return;
-        }
 
         FindSteadyState f(op->name);
         Stmt simpler_body = f.mutate(body);
@@ -738,6 +696,7 @@ class PartitionLoops : public IRMutator {
 
             Stmt new_loop;
 
+
             if (op->for_type == ForType::Serial) {
                 // Steady state.
                 new_loop = For::make(op->name, min_steady, max_steady - min_steady,
@@ -772,6 +731,7 @@ class PartitionLoops : public IRMutator {
                 // bounds-based simplification of the prologue and
                 // epilogue.
                 internal_assert(op->for_type == ForType::Parallel);
+
                 Expr loop_var = Variable::make(Int(32), op->name);
                 Expr in_steady;
                 if (make_prologue) {
@@ -784,6 +744,7 @@ class PartitionLoops : public IRMutator {
                 if (in_steady.defined()) {
                     body = IfThenElse::make(in_steady, simpler_body, body);
                 }
+
                 new_loop = For::make(op->name, op->min, op->extent, op->for_type, op->device_api, body);
 
             }
@@ -822,10 +783,103 @@ class RemoveLikelyTags : public IRMutator {
     }
 };
 
+// The loop partitioning logic can introduce if statements in between
+// GPU loop levels. This pass moves them inwards.
+class RenormalizeGPULoops : public IRMutator {
+    bool in_gpu_loop = false, in_thread_loop = false;
+
+    using IRMutator::visit;
+
+    void visit(const For *op) {
+        if (ends_with(op->name, Var::gpu_threads().name())) {
+            stmt = op;
+            return;
+        }
+
+        bool old_in_gpu_loop = in_gpu_loop;
+
+        in_gpu_loop |= CodeGen_GPU_Dev::is_gpu_var(op->name);
+        IRMutator::visit(op);
+
+        in_gpu_loop = old_in_gpu_loop;
+    }
+
+    void visit(const IfThenElse *op) {
+        if (!in_gpu_loop) {
+            IRMutator::visit(op);
+            return;
+        }
+
+        internal_assert(op->else_case.defined())
+            << "PartitionLoops should only introduce if statements with an else branch\n";
+
+        Stmt then_case = mutate(op->then_case);
+        Stmt else_case = mutate(op->else_case);
+
+        if (equal(then_case, else_case)) {
+            // This can happen if the only difference between the
+            // cases was a let statement that we pulled out of the if.
+            stmt = then_case;
+            return;
+        }
+
+        const Allocate *allocate_a = then_case.as<Allocate>();
+        const Allocate *allocate_b = else_case.as<Allocate>();
+        const For *for_a = then_case.as<For>();
+        const For *for_b = else_case.as<For>();
+        const LetStmt *let_a = then_case.as<LetStmt>();
+        const LetStmt *let_b = else_case.as<LetStmt>();
+        if (allocate_a && allocate_b &&
+            allocate_a->name == "__shared" &&
+            allocate_b->name == "__shared") {
+            Stmt inner = mutate(IfThenElse::make(op->condition, allocate_a->body, allocate_b->body));
+            stmt = Allocate::make(allocate_a->name, allocate_a->type, allocate_a->extents, allocate_a->condition, inner);
+        } else if (let_a && let_b && let_a->name == let_b->name) {
+            string condition_name = unique_name('t');
+            Expr condition = Variable::make(op->condition.type(), condition_name);
+            Stmt inner = mutate(IfThenElse::make(condition, let_a->body, let_b->body));
+            inner = LetStmt::make(let_a->name, select(condition, let_a->value, let_b->value), inner);
+            stmt = LetStmt::make(condition_name, op->condition, inner);
+        } else if (let_a) {
+            string new_name = unique_name(let_a->name, false);
+            Stmt inner = let_a->body;
+            inner = substitute(let_a->name, Variable::make(let_a->value.type(), new_name), inner);
+            inner = mutate(IfThenElse::make(op->condition, inner, else_case));
+            stmt = LetStmt::make(new_name, let_a->value, inner);
+        } else if (let_b) {
+            string new_name = unique_name(let_b->name, false);
+            Stmt inner = let_b->body;
+            inner = substitute(let_b->name, Variable::make(let_b->value.type(), new_name), inner);
+            inner = mutate(IfThenElse::make(op->condition, then_case, inner));
+            stmt = LetStmt::make(new_name, let_b->value, inner);
+        } else if (for_a && for_b &&
+                   for_a->name == for_b->name &&
+                   for_a->min.same_as(for_b->min) &&
+                   for_a->extent.same_as(for_b->extent)) {
+            Stmt inner = IfThenElse::make(op->condition, for_a->body, for_b->body);
+            if (ends_with(for_a->name, Var::gpu_threads().name())) {
+                in_thread_loop = true;
+                inner = mutate(inner);
+                in_thread_loop = false;
+            } else {
+                inner = mutate(inner);
+            }
+            stmt = For::make(for_a->name, for_a->min, for_a->extent, for_a->for_type, for_a->device_api, inner);
+        } else if (in_thread_loop) {
+            stmt = op;
+        } else {
+            internal_error << "Unexpected construct inside if statement: " << Stmt(op) << "\n";
+        }
+
+    }
+
+};
+
 }
 
 Stmt partition_loops(Stmt s) {
     s = PartitionLoops().mutate(s);
+    s = RenormalizeGPULoops().mutate(s);
     s = RemoveLikelyTags().mutate(s);
     return s;
 }

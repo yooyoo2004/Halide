@@ -71,12 +71,12 @@ public:
 
 void count_partitions(Func g, int correct) {
     g.add_custom_lowering_pass(new CheckStoreCount(g.name(), correct));
-    g.compile_jit();
+    g.compile_to_module(g.infer_arguments());
 }
 
 void count_sin_calls(Func g, int correct) {
     g.add_custom_lowering_pass(new CheckSinCount(correct));
-    g.compile_jit();
+    g.compile_to_module(g.infer_arguments());
 }
 
 int main(int argc, char **argv) {
@@ -198,14 +198,14 @@ int main(int argc, char **argv) {
         RDom r(0, 5);
 
         // Make some nasty expressions to compare to.
-        Expr e[7];
+        Expr e[25];
         e[0] = y;
-        for (int i = 1; i < 7; i++) {
+        for (int i = 1; i < 25; i++) {
             e[i] = e[i-1] * e[i-1] + y + r;
         }
         // Make a nasty condition that uses all of these.
         Expr nasty = cast<bool>(1);
-        for (int i = 0; i < 7; i++) {
+        for (int i = 0; i < 25; i++) {
             nasty = nasty && (x*(i+1) < e[i]);
         }
 
@@ -216,10 +216,6 @@ int main(int argc, char **argv) {
         // Check that it doesn't take the age of the world to compile,
         // and that it produces the right number of partitions.
         count_partitions(g, 3);
-
-        // Note: The loops above would be larger, but the above code
-        // sails through Halide then triggers exponential behavior
-        // inside of LLVM :(
     }
 
     // The performance of this behavior is tested in

@@ -8,6 +8,7 @@
 #include "IRMutator.h"
 #include "Target.h"
 #include "Inline.h"
+#include "CodeGen_GPU_Dev.h"
 
 namespace Halide {
 namespace Internal {
@@ -149,8 +150,10 @@ Stmt build_provide_loop_nest(Function f,
             } else if (!is_update) {
                 // Adjust the base downwards to not compute off the
                 // end of the realization.
-
-                base = Min::make(likely(base), old_max + (1 - split.factor));
+                if (!CodeGen_GPU_Dev::is_gpu_var(split.inner)) {
+                    base = likely(base);
+                }
+                base = Min::make(base, old_max + (1 - split.factor));
 
             }
 
