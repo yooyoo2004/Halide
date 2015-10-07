@@ -88,18 +88,39 @@ bool is_no_op(Stmt s) {
 }
 
 const int64_t *as_const_int(Expr e) {
-    const IntImm *i = e.as<IntImm>();
-    return i ? &(i->value) : NULL;
+    if (!e.defined()) {
+        return NULL;
+    } else if (const Broadcast *b = e.as<Broadcast>()) {
+        return as_const_int(b->value);
+    } else if (const IntImm *i = e.as<IntImm>()) {
+        return &(i->value);
+    } else {
+        return NULL;
+    }
 }
 
 const uint64_t *as_const_uint(Expr e) {
-    const UIntImm *i = e.as<UIntImm>();
-    return i ? &(i->value) : NULL;
+    if (!e.defined()) {
+        return NULL;
+    } else if (const Broadcast *b = e.as<Broadcast>()) {
+        return as_const_uint(b->value);
+    } else if (const UIntImm *i = e.as<UIntImm>()) {
+        return &(i->value);
+    } else {
+        return NULL;
+    }
 }
 
 const double *as_const_float(Expr e) {
-    const FloatImm *f = e.as<FloatImm>();
-    return f ? &(f->value) : NULL;
+    if (!e.defined()) {
+        return NULL;
+    } else if (const Broadcast *b = e.as<Broadcast>()) {
+        return as_const_float(b->value);
+    } else if (const FloatImm *f = e.as<FloatImm>()) {
+        return &(f->value);
+    } else {
+        return NULL;
+    }
 }
 
 bool is_const_power_of_two_integer(Expr e, int *bits) {
@@ -166,8 +187,7 @@ bool is_negative_const(Expr e) {
 
 bool is_negative_negatable_const(Expr e, Type T) {
     if (const IntImm *i = e.as<IntImm>()) {
-        return i->value < 0 &&
-               i->value != T.imin();
+        return (i->value < 0 && !T.is_min(i->value));
     }
     if (const FloatImm *f = e.as<FloatImm>()) return f->value < 0.0f;
     if (const Cast *c = e.as<Cast>()) {
@@ -281,10 +301,11 @@ Expr lossless_cast(Type t, Expr e) {
     }
 
     if (const Cast *c = e.as<Cast>()) {
-        if (t == c->value.type()) {
-            return c->value;
-        } else {
+        if (t.can_represent(c->value.type())) {
+            // We can recurse into widening casts.
             return lossless_cast(t, c->value);
+        } else {
+            return Expr();
         }
     }
 
@@ -299,7 +320,7 @@ Expr lossless_cast(Type t, Expr e) {
 
     if (const IntImm *i = e.as<IntImm>()) {
         if (t.can_represent(i->value)) {
-            return IntImm::make(t, i->value);
+            return make_const(t, i->value);
         } else {
             return Expr();
         }
@@ -307,7 +328,7 @@ Expr lossless_cast(Type t, Expr e) {
 
     if (const UIntImm *i = e.as<UIntImm>()) {
         if (t.can_represent(i->value)) {
-            return UIntImm::make(t, i->value);
+            return make_const(t, i->value);
         } else {
             return Expr();
         }
@@ -315,7 +336,7 @@ Expr lossless_cast(Type t, Expr e) {
 
     if (const FloatImm *f = e.as<FloatImm>()) {
         if (t.can_represent(f->value)) {
-            return FloatImm::make(t, f->value);
+            return make_const(t, f->value);
         } else {
             return Expr();
         }
@@ -325,10 +346,18 @@ Expr lossless_cast(Type t, Expr e) {
 }
 
 void check_representable(Type dst, int64_t x) {
-    user_assert(dst.can_represent(x))
-        << "Integer constant " << x
-        << " will be implicitly coerced to type " << dst
-        << ", which changes its value.\n";
+    if (dst.is_handle()) {
+        user_assert(dst.can_represent(x))
+            << "Integer constant " << x
+            << " will be implicitly coerced to type " << dst
+            << ", but Halide does not support pointer arithmetic.\n";
+    } else {
+        user_assert(dst.can_represent(x))
+            << "Integer constant " << x
+            << " will be implicitly coerced to type " << dst
+            << ", which changes its value to " << make_const(dst, x)
+            << ".\n";
+    }
 }
 
 void match_types(Expr &a, Expr &b) {
