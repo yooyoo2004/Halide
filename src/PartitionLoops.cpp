@@ -783,42 +783,81 @@ class RemoveLikelyTags : public IRMutator {
     }
 };
 
-// The loop partitioning logic can introduce if statements in between
-// GPU loop levels. This pass moves them inwards.
+// The loop partitioning logic can introduce if and let statements in
+// between GPU loop levels. This pass moves them inwards or outwards.
 class RenormalizeGPULoops : public IRMutator {
-    bool in_gpu_loop = false;
+    bool in_gpu_loop = false, in_thread_loop = false;
 
     using IRMutator::visit;
 
+    // Track all vars that depend on GPU loop indices
+    Scope<int> gpu_vars;
+
+    vector<pair<string, Expr> > lifted_lets;
+
     void visit(const For *op) {
         if (ends_with(op->name, Var::gpu_threads().name())) {
-            stmt = op;
+            in_thread_loop = true;
+            IRMutator::visit(op);
+            in_thread_loop = false;
             return;
         }
 
         bool old_in_gpu_loop = in_gpu_loop;
 
         if (CodeGen_GPU_Dev::is_gpu_var(op->name)) {
+            gpu_vars.push(op->name, 0);
             in_gpu_loop = true;
         }
 
         IRMutator::visit(op);
 
+        if (in_gpu_loop && !old_in_gpu_loop) {
+            // This was the outermost GPU loop. Dump any lifted lets here.
+            while (lifted_lets.size()) {
+                stmt = LetStmt::make(lifted_lets.back().first,
+                                     lifted_lets.back().second,
+                                     stmt);
+                lifted_lets.pop_back();
+            }
+        }
+
         in_gpu_loop = old_in_gpu_loop;
+
+
     }
 
     void visit(const LetStmt *op) {
+        if (!in_gpu_loop) {
+            IRMutator::visit(op);
+            return;
+        }
+
+        if (!expr_uses_vars(op->value, gpu_vars)) {
+            // This let value doesn't depend in the gpu vars. We should lift it outermost.
+            lifted_lets.push_back(make_pair(op->name, op->value));
+            stmt = mutate(op->body);
+            return;
+        }
+
+        if (in_thread_loop) {
+            IRMutator::visit(op);
+            return;
+        }
+
+        gpu_vars.push(op->name, 0);
+
         Stmt body = mutate(op->body);
         const For *f = body.as<For>();
         const Allocate *a = body.as<Allocate>();
         // Move lets in-between gpu loop levels inwards.
-        if (f && in_gpu_loop) {
+        if (f && in_gpu_loop && !in_thread_loop) {
             internal_assert(!expr_uses_var(f->min, op->name) &&
                             !expr_uses_var(f->extent, op->name));
             Stmt inner = LetStmt::make(op->name, op->value, f->body);
             inner = For::make(f->name, f->min, f->extent, f->for_type, f->device_api, inner);
             stmt = mutate(inner);
-        } else if (a && in_gpu_loop) {
+        } else if (a && in_gpu_loop && !in_thread_loop) {
             internal_assert(a->name == "__shared");
             Stmt inner = LetStmt::make(op->name, op->value, a->body);
             inner = Allocate::make(a->name, a->type, a->extents, a->condition, inner);
@@ -829,7 +868,7 @@ class RenormalizeGPULoops : public IRMutator {
     }
 
     void visit(const IfThenElse *op) {
-        if (!in_gpu_loop) {
+        if (!in_gpu_loop || in_thread_loop) {
             IRMutator::visit(op);
             return;
         }
