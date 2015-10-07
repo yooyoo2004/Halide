@@ -786,7 +786,7 @@ class RemoveLikelyTags : public IRMutator {
 // The loop partitioning logic can introduce if statements in between
 // GPU loop levels. This pass moves them inwards.
 class RenormalizeGPULoops : public IRMutator {
-    bool in_gpu_loop = false, in_thread_loop = false;
+    bool in_gpu_loop = false;
 
     using IRMutator::visit;
 
@@ -798,10 +798,34 @@ class RenormalizeGPULoops : public IRMutator {
 
         bool old_in_gpu_loop = in_gpu_loop;
 
-        in_gpu_loop |= CodeGen_GPU_Dev::is_gpu_var(op->name);
+        if (CodeGen_GPU_Dev::is_gpu_var(op->name)) {
+            in_gpu_loop = true;
+        }
+
         IRMutator::visit(op);
 
         in_gpu_loop = old_in_gpu_loop;
+    }
+
+    void visit(const LetStmt *op) {
+        Stmt body = mutate(op->body);
+        const For *f = body.as<For>();
+        const Allocate *a = body.as<Allocate>();
+        // Move lets in-between gpu loop levels inwards.
+        if (f && in_gpu_loop) {
+            internal_assert(!expr_uses_var(f->min, op->name) &&
+                            !expr_uses_var(f->extent, op->name));
+            Stmt inner = LetStmt::make(op->name, op->value, f->body);
+            inner = For::make(f->name, f->min, f->extent, f->for_type, f->device_api, inner);
+            stmt = mutate(inner);
+        } else if (a && in_gpu_loop) {
+            internal_assert(a->name == "__shared");
+            Stmt inner = LetStmt::make(op->name, op->value, a->body);
+            inner = Allocate::make(a->name, a->type, a->extents, a->condition, inner);
+            stmt = mutate(inner);
+        } else {
+            IRMutator::visit(op);
+        }
     }
 
     void visit(const IfThenElse *op) {
@@ -832,41 +856,37 @@ class RenormalizeGPULoops : public IRMutator {
         if (allocate_a && allocate_b &&
             allocate_a->name == "__shared" &&
             allocate_b->name == "__shared") {
-            Stmt inner = mutate(IfThenElse::make(op->condition, allocate_a->body, allocate_b->body));
-            stmt = Allocate::make(allocate_a->name, allocate_a->type, allocate_a->extents, allocate_a->condition, inner);
+            Stmt inner = IfThenElse::make(op->condition, allocate_a->body, allocate_b->body);
+            inner = Allocate::make(allocate_a->name, allocate_a->type, allocate_a->extents, allocate_a->condition, inner);
+            stmt = mutate(inner);
         } else if (let_a && let_b && let_a->name == let_b->name) {
             string condition_name = unique_name('t');
             Expr condition = Variable::make(op->condition.type(), condition_name);
-            Stmt inner = mutate(IfThenElse::make(condition, let_a->body, let_b->body));
+            Stmt inner = IfThenElse::make(condition, let_a->body, let_b->body);
             inner = LetStmt::make(let_a->name, select(condition, let_a->value, let_b->value), inner);
-            stmt = LetStmt::make(condition_name, op->condition, inner);
+            inner = LetStmt::make(condition_name, op->condition, inner);
+            stmt = mutate(inner);
         } else if (let_a) {
             string new_name = unique_name(let_a->name, false);
             Stmt inner = let_a->body;
             inner = substitute(let_a->name, Variable::make(let_a->value.type(), new_name), inner);
-            inner = mutate(IfThenElse::make(op->condition, inner, else_case));
-            stmt = LetStmt::make(new_name, let_a->value, inner);
+            inner = IfThenElse::make(op->condition, inner, else_case);
+            inner = LetStmt::make(new_name, let_a->value, inner);
+            stmt = mutate(inner);
         } else if (let_b) {
             string new_name = unique_name(let_b->name, false);
             Stmt inner = let_b->body;
             inner = substitute(let_b->name, Variable::make(let_b->value.type(), new_name), inner);
-            inner = mutate(IfThenElse::make(op->condition, then_case, inner));
-            stmt = LetStmt::make(new_name, let_b->value, inner);
+            inner = IfThenElse::make(op->condition, then_case, inner);
+            inner = LetStmt::make(new_name, let_b->value, inner);
+            stmt = mutate(inner);
         } else if (for_a && for_b &&
                    for_a->name == for_b->name &&
                    for_a->min.same_as(for_b->min) &&
                    for_a->extent.same_as(for_b->extent)) {
             Stmt inner = IfThenElse::make(op->condition, for_a->body, for_b->body);
-            if (ends_with(for_a->name, Var::gpu_threads().name())) {
-                in_thread_loop = true;
-                inner = mutate(inner);
-                in_thread_loop = false;
-            } else {
-                inner = mutate(inner);
-            }
-            stmt = For::make(for_a->name, for_a->min, for_a->extent, for_a->for_type, for_a->device_api, inner);
-        } else if (in_thread_loop) {
-            stmt = op;
+            inner = For::make(for_a->name, for_a->min, for_a->extent, for_a->for_type, for_a->device_api, inner);
+            stmt = mutate(inner);
         } else {
             internal_error << "Unexpected construct inside if statement: " << Stmt(op) << "\n";
         }
