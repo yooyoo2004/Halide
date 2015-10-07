@@ -105,7 +105,11 @@ string simt_intrinsic(const string &name) {
 }
 
 void CodeGen_OpenCL_Dev::CodeGen_OpenCL_C::visit(const Div *op) {
-    if (op->type.is_int()) {
+
+    int bits;
+    if (!op->type.is_float() && is_const_power_of_two_integer(op->b, &bits)) {
+        visit_binop(op->type, op->a, bits, ">>");
+    } else if (op->type.is_int()) {
         print_expr(Call::make(op->type, "sdiv_" + print_type(op->type), {op->a, op->b}, Call::Extern));
     } else {
         visit_binop(op->type, op->a, op->b, "/");
