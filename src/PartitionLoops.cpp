@@ -59,7 +59,7 @@ public:
     }
 
     FindSteadyState(const string &l) : loop_var(l), likely(false) {
-        free_vars.push(l, 0);
+        inner_loop_vars.push(l, Interval(Expr(), Expr()));
     }
 
     Stmt simplify_prologue(Stmt s) {
@@ -119,7 +119,6 @@ private:
 
     string loop_var;
     Scope<Expr> bound_vars;
-    Scope<int> free_vars;
     Scope<Interval> inner_loop_vars;
 
     bool tight;
@@ -340,14 +339,21 @@ private:
         vector<pair<string, Expr>> new_lets;
         while (const Let *let = solved.as<Let>()) {
             Interval i = bounds_of_expr_in_scope(let->value, inner_loop_vars);
-            if (i.min.same_as(i.max)) {
+            if (i.min.defined() && i.min.same_as(i.max)) {
                 new_lets.push_back(make_pair(let->name, i.min));
             } else {
-                Expr min_var = Variable::make(let->value.type(), let->name + ".min");
-                Expr max_var = Variable::make(let->value.type(), let->name + ".max");
+                string min_name = unique_name(let->name + ".min", false);
+                string max_name = unique_name(let->name + ".max", false);
+                Expr min_var, max_var;
+                if (i.min.defined()) {
+                    min_var = Variable::make(let->value.type(), min_name);
+                    new_lets.push_back(make_pair(min_name, i.min));
+                }
+                if (i.max.defined()) {
+                    max_var = Variable::make(let->value.type(), max_name);
+                    new_lets.push_back(make_pair(max_name, i.max));
+                }
                 inner_loop_vars.push(let->name, Interval(min_var, max_var));
-                new_lets.push_back(make_pair(let->name + ".min", i.min));
-                new_lets.push_back(make_pair(let->name + ".max", i.max));
             }
             solved = let->body;
         }
@@ -579,36 +585,40 @@ private:
         stmt = visit_select_or_if(op, op->then_case, op->else_case);
     }
 
-    template<typename LetOrLetStmt, typename StmtOrExpr>
-    StmtOrExpr visit_let(const LetOrLetStmt *op) {
+    template<typename LetStmtOrLet, typename StmtOrExpr>
+    StmtOrExpr visit_let(const LetStmtOrLet *op) {
         Expr value = mutate(op->value);
         StmtOrExpr body;
 
         bool pushed_bounds = false;
         bound_vars.push(op->name, value);
+        Interval i;
+        string min_name = unique_name(op->name + ".min", false);
+        string max_name = unique_name(op->name + ".max", false);
         if (value.type().is_scalar()) {
-            Interval i = bounds_of_expr_in_scope(value, inner_loop_vars);
-            if (!i.min.same_as(i.max) || !i.min.same_as(value)) {
+            // If the value depends on a loop var, then we need to
+            // consider it as varying.
+            i = bounds_of_expr_in_scope(value, inner_loop_vars);
+            if (!i.max.same_as(value) || !i.min.same_as(value)) {
                 pushed_bounds = true;
-                bound_vars.push(op->name + ".min", i.min);
-                bound_vars.push(op->name + ".max", i.max);
-                inner_loop_vars.push(op->name, Interval(Variable::make(value.type(), op->name + ".min"),
-                                                        Variable::make(value.type(), op->name + ".max")));
+                inner_loop_vars.push(op->name, i);
             }
         }
         body = mutate(op->body);
         bound_vars.pop(op->name);
         if (pushed_bounds) {
-            bound_vars.pop(op->name + ".min");
-            bound_vars.pop(op->name + ".max");
             inner_loop_vars.pop(op->name);
         }
 
+        StmtOrExpr result;
+
         if (value.same_as(op->value) && body.same_as(op->body)) {
-            return op;
+            result = op;
         } else {
-            return LetOrLetStmt::make(op->name, value, body);
+            result = LetStmtOrLet::make(op->name, value, body);
         }
+
+        return result;
     }
 
     void visit(const Let *op) {
@@ -623,7 +633,10 @@ private:
         Expr min = mutate(op->min);
         Expr extent = mutate(op->extent);
         Expr min_val = bounds_of_expr_in_scope(min, inner_loop_vars).min;
-        Expr max_val = bounds_of_expr_in_scope(min_val + extent - 1, inner_loop_vars).max;
+        Expr max_val;
+        if (min_val.defined()) {
+            max_val = bounds_of_expr_in_scope(min_val + extent - 1, inner_loop_vars).max;
+        }
         inner_loop_vars.push(op->name, Interval(min_val, max_val));
         Stmt body = mutate(op->body);
         inner_loop_vars.pop(op->name);
