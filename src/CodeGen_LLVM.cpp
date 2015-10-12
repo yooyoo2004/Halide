@@ -1280,21 +1280,29 @@ void CodeGen_LLVM::visit(const Mod *op) {
             Expr one = make_one(op->b.type());
             value = builder->CreateAnd(codegen(op->a), codegen(op->b - one));
         } else {
-            Value *a = codegen(op->a);
-            Value *b = codegen(op->b);
+            if (op->type.is_vector() && op->type.bits <= 32) {
+                // It's worth doing the computation as a float using
+                // vectorizable ops.
+                Type float_ty = Float(op->type.bits <= 16 ? 32 : 64, op->type.width);
+                value = codegen(cast(op->type, cast(float_ty, op->a) % cast(float_ty, op->b)));
+            } else {
 
-            // Match this non-overflowing C code
-            /*
-              T r = a % b;
-              r = r + (r < 0 ? abs(b) : 0);
-            */
+                Value *a = codegen(op->a);
+                Value *b = codegen(op->b);
 
-            Value *r = builder->CreateSRem(a, b);
-            Value *zero = ConstantInt::get(r->getType(), 0);
-            Value *b_lt_0 = builder->CreateICmpSLT(b, zero);
-            Value *abs_b = builder->CreateSelect(b_lt_0, builder->CreateNeg(b), b);
-            Value *r_lt_0 = builder->CreateICmpSLT(r, zero);
-            value = builder->CreateSelect(r_lt_0, builder->CreateAdd(r, abs_b), r);
+                // Match this non-overflowing C code
+                /*
+                  T r = a % b;
+                  r = r + (r < 0 ? abs(b) : 0);
+                */
+
+                Value *r = builder->CreateSRem(a, b);
+                Value *zero = ConstantInt::get(r->getType(), 0);
+                Value *b_lt_0 = builder->CreateICmpSLT(b, zero);
+                Value *abs_b = builder->CreateSelect(b_lt_0, builder->CreateNeg(b), b);
+                Value *r_lt_0 = builder->CreateICmpSLT(r, zero);
+                value = builder->CreateSelect(r_lt_0, builder->CreateAdd(r, abs_b), r);
+            }
         }
     }
 }
