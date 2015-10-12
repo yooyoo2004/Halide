@@ -217,7 +217,6 @@ private:
             min = bounds.min;
             max = bounds.max;
         } else {
-            debug(3) << op->name << " not in scope, so leaving it as-is\n";
             min = op;
             max = op;
         }
