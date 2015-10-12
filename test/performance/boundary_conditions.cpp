@@ -3,7 +3,7 @@
 
 #include "benchmark.h"
 
-const int W = 3200, H = 2400;
+const int W = 4000, H = 2400;
 
 using namespace Halide;
 using namespace Halide::BoundaryConditions;
@@ -25,13 +25,12 @@ struct Test {
         } else {
             g.vectorize(x, 4);
         }
-        g.compile_jit();
 
         Image<float> out = g.realize(W, H);
 
         Buffer buf(out);
-        // best of 10 x 10 runs.
-        time = benchmark(10, 10, [&]() {
+        // best of 10 x 5 runs.
+        time = benchmark(10, 5, [&]() {
                 g.realize(buf);
                 buf.device_sync();
         });
@@ -41,22 +40,23 @@ struct Test {
 
     // Test a larger stencil using an RDom
     void test2() {
+        Param<int> blur_radius(2, 0, 10);
+
         Func g(name);
-        Var x, y;
-        RDom r(-3, 7, -3, 7);
+        Var x, y, xi, yi;
+        RDom r(-blur_radius, 2*blur_radius+1, -blur_radius, 2*blur_radius+1);
         g(x, y) = sum(f(x + r.x, y + r.y));
         if (target.has_gpu_feature()) {
             g.gpu_tile(x, y, 8, 8);
         } else {
-            g.vectorize(x, 4);
+            g.tile(x, y, xi, yi, 8, 8).vectorize(xi, 4);
         }
-        g.compile_jit();
 
         Image<float> out = g.realize(W, H);
 
-        // best of 5 x 5 runs.
+        // best of 3 x 3 runs.
         Buffer buf(out);
-        time = benchmark(5, 5, [&]() {
+        time = benchmark(3, 3, [&]() {
                 g.realize(buf);
                 buf.device_sync();
         });

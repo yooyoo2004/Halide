@@ -10,6 +10,7 @@
 #include "Substitute.h"
 #include "CodeGen_GPU_Dev.h"
 #include "Var.h"
+#include "CSE.h"
 
 namespace Halide {
 namespace Internal {
@@ -20,6 +21,178 @@ using std::pair;
 using std::make_pair;
 
 namespace {
+
+class RelaxConditionUsingBounds : public IRMutator {
+    using IRMutator::visit;
+
+    Scope<Interval> scope;
+    Scope<Expr> bound_vars;
+    bool flipped = false;
+
+    // The horizontal minimum of a vector expression. Returns an
+    // undefined Expr if it can't be statically determined.
+    Expr min_lane(Expr e) {
+        if (e.type().is_scalar()) return e;
+        if (const Broadcast *b = e.as<Broadcast>()) return b->value;
+        if (const Ramp *r = e.as<Ramp>()) {
+            if (is_positive_const(r->stride)) {
+                return r->base;
+            } else if (is_negative_const(r->stride)) {
+                return r->base + (r->width-1)*r->stride;
+            }
+        }
+        if (const Variable *v = e.as<Variable>()) {
+            if (bound_vars.contains(v->name)) {
+                return min_lane(bound_vars.get(v->name));
+            }
+        }
+        if (const Call *c = e.as<Call>()) {
+            if (c->name == Call::likely && c->call_type == Call::Intrinsic) {
+                return min_lane(c->args[0]);
+            }
+        }
+        return Expr();
+    }
+
+    // The horizontal maximum of a vector expression. Returns an
+    // undefined Expr if it can't be statically determined.
+    Expr max_lane(Expr e) {
+        if (e.type().is_scalar()) return e;
+        if (const Broadcast *b = e.as<Broadcast>()) return b->value;
+        if (const Ramp *r = e.as<Ramp>()) {
+            if (is_positive_const(r->stride)) {
+                return r->base + (r->width-1)*r->stride;
+            } else if (is_negative_const(r->stride)) {
+                return r->base;
+            }
+        }
+        if (const Variable *v = e.as<Variable>()) {
+            if (bound_vars.contains(v->name)) {
+                return max_lane(bound_vars.get(v->name));
+            }
+        }
+        if (const Call *c = e.as<Call>()) {
+            if (c->name == Call::likely && c->call_type == Call::Intrinsic) {
+                return max_lane(c->args[0]);
+            }
+        }
+        return Expr();
+    }
+
+    Expr make_bigger(Expr a) {
+        a = max_lane(a);
+        if (a.defined()) {
+            a = bounds_of_expr_in_scope(a, scope).max;
+        }
+        return a;
+    }
+
+    Expr make_smaller(Expr a) {
+        a = min_lane(a);
+        if (a.defined()) {
+            a = bounds_of_expr_in_scope(a, scope).min;
+        }
+        return a;
+    }
+
+    void visit(const Broadcast *op) {
+        expr = mutate(op->value);
+    }
+
+    template<typename Cmp, bool is_lt_or_le>
+    void visit_cmp(const Cmp *op) {
+        Expr a, b;
+        if (is_lt_or_le ^ flipped) {
+            a = make_bigger(op->a);
+            b = make_smaller(op->b);
+        } else {
+            a = make_smaller(op->a);
+            b = make_bigger(op->b);
+        }
+        if (!a.defined() || !b.defined()) {
+            if (flipped) {
+                expr = make_one(op->type.element_of());
+            } else {
+                expr = make_zero(op->type.element_of());
+            }
+        } else if (a.same_as(op->a) && b.same_as(op->b)) {
+            expr = op;
+        } else {
+            expr = Cmp::make(a, b);
+        }
+    }
+
+    void visit(const LT *op) {
+        visit_cmp<LT, true>(op);
+    }
+
+    void visit(const LE *op) {
+        visit_cmp<LE, true>(op);
+    }
+
+    void visit(const GT *op) {
+        visit_cmp<GT, false>(op);
+    }
+
+    void visit(const GE *op) {
+        visit_cmp<GE, false>(op);
+    }
+
+    void visit(const Not *op) {
+        flipped = !flipped;
+        IRMutator::visit(op);
+        flipped = !flipped;
+    }
+
+    void visit(const Let *op) {
+        // We're unlikely to encounter many of these inside a select
+        // condition or min/max args - they get lifted out before this
+        // point. So we'll just substitute the bounds in directly if
+        // the let value varies.
+
+        Expr value = mutate(op->value);
+        Expr body;
+        Expr value_max = make_bigger(value);
+        Expr value_min = make_smaller(value);
+        Interval i = bounds_of_expr_in_scope(value, scope);
+        if (!value_max.same_as(value) || !value_min.same_as(value)) {
+            scope.push(op->name, Interval(value_min, value_max));
+            expr = mutate(op->body);
+            scope.pop(op->name);
+        } else {
+            bound_vars.push(op->name, value);
+            body = mutate(op->body);
+            bound_vars.pop(op->name);
+            if (value.same_as(op->value) && body.same_as(op->body)) {
+                expr = op;
+            } else {
+                expr = Let::make(op->name, value, body);
+            }
+        }
+    }
+
+public:
+    RelaxConditionUsingBounds(const Scope<Interval> &parent_scope, const Scope<Expr> &parent_bound_vars) {
+        scope.set_containing_scope(&parent_scope);
+        bound_vars.set_containing_scope(&parent_bound_vars);
+    }
+};
+
+// Take a conditional that includes variables that vary over some
+// domain, and convert it to a more conservative (less frequently
+// true) condition that doesn't depend on those variables. Formally,
+// the output expr implies the input expr. Sets 'tight' to false if a
+// change was made (i.e. the output implies the input, but the input
+// does not imply the output).
+Expr relax_condition_using_bounds(Expr e, const Scope<Interval> &varying, const Scope<Expr> &fixed, bool *tight) {
+    RelaxConditionUsingBounds r(varying, fixed);
+    Expr out = r.mutate(e);
+    if (!out.same_as(e)) {
+        *tight = false;
+        out = simplify(out);
+    }
+    return out;
+}
 
 // Simplify an expression by assuming that certain mins, maxes, and
 // select statements always evaluate down one path for the bulk of a
@@ -59,7 +232,6 @@ public:
     }
 
     FindSteadyState(const string &l) : loop_var(l), likely(false) {
-        inner_loop_vars.push(l, Interval(Expr(), Expr()));
     }
 
     Stmt simplify_prologue(Stmt s) {
@@ -136,56 +308,6 @@ private:
 
     using IRVisitor::visit;
 
-    // The horizontal maximum of a vector expression. Returns an
-    // undefined Expr if it can't be statically determined.
-    Expr max_lane(Expr e) {
-        if (e.type().is_scalar()) return e;
-        if (const Broadcast *b = e.as<Broadcast>()) return b->value;
-        if (const Ramp *r = e.as<Ramp>()) {
-            if (is_positive_const(r->stride)) {
-                return r->base + (r->width-1)*r->stride;
-            } else if (is_negative_const(r->stride)) {
-                return r->base;
-            }
-        }
-        if (const Variable *v = e.as<Variable>()) {
-            if (bound_vars.contains(v->name)) {
-                return max_lane(bound_vars.get(v->name));
-            }
-        }
-        if (const Call *c = e.as<Call>()) {
-            if (c->name == Call::likely && c->call_type == Call::Intrinsic) {
-                return max_lane(c->args[0]);
-            }
-        }
-        return Expr();
-    }
-
-    // The horizontal minimum of a vector expression. Returns an
-    // undefined Expr if it can't be statically determined.
-    Expr min_lane(Expr e) {
-        if (e.type().is_scalar()) return e;
-        if (const Broadcast *b = e.as<Broadcast>()) return b->value;
-        if (const Ramp *r = e.as<Ramp>()) {
-            if (is_positive_const(r->stride)) {
-                return r->base;
-            } else if (is_negative_const(r->stride)) {
-                return r->base + (r->width-1)*r->stride;
-            }
-        }
-        if (const Variable *v = e.as<Variable>()) {
-            if (bound_vars.contains(v->name)) {
-                return min_lane(bound_vars.get(v->name));
-            }
-        }
-        if (const Call *c = e.as<Call>()) {
-            if (c->name == Call::likely && c->call_type == Call::Intrinsic) {
-                return min_lane(c->args[0]);
-            }
-        }
-        return Expr();
-    }
-
     void visit(const Call *op) {
         IRMutator::visit(op);
         if (op->call_type == Call::Intrinsic && op->name == Call::likely) {
@@ -220,7 +342,8 @@ private:
 
     Expr make_not(Expr a) {
         if (is_one(a)) return const_false(a.type().width);
-        if (is_zero(a)) return const_true(a.type().width);
+        else if (is_zero(a)) return const_true(a.type().width);
+        else if (const Not *n = a.as<Not>()) return n->a;
         return !a;
     }
 
@@ -253,7 +376,7 @@ private:
             }
         }
 
-        debug(3) << "Failed to apply constraint (1): " << cond << "\n";
+        debug(3) << "  Failed to apply constraint (1): " << cond << "\n";
         return cond;
     }
 
@@ -280,55 +403,20 @@ private:
             }
         }
 
-        // Convert vector conditions to scalar conditions. In general
-        // these are conservative, so they make the bound no longer
-        // tight.
-        if (cond.type().is_vector()) {
-            if (const LT *lt = cond.as<LT>()) {
-                Expr a = max_lane(lt->a), b = min_lane(lt->b);
-                if (a.defined() && b.defined()) {
-                    tight = false;
-                    cond = a < b;
-                } else {
-                    return cond;
-                }
-            } else if (const LE *le = cond.as<LE>()) {
-                Expr a = max_lane(le->a), b = min_lane(le->b);
-                if (a.defined() && b.defined()) {
-                    tight = false;
-                    cond = a <= b;
-                } else {
-                    return cond;
-                }
-            } else if (const GE *ge = cond.as<GE>()) {
-                Expr a = min_lane(ge->a), b = max_lane(ge->b);
-                if (a.defined() && b.defined()) {
-                    tight = false;
-                    cond = a >= b;
-                } else {
-                    return cond;
-                }
-            } else if (const GT *gt = cond.as<GT>()) {
-                Expr a = min_lane(gt->a), b = max_lane(gt->b);
-                if (a.defined() && b.defined()) {
-                    tight = false;
-                    cond = a > b;
-                } else {
-                    return cond;
-                }
-            } else {
-                debug(3) << "Failed to apply constraint (2): " << cond << "\n";
-                return cond;
-            }
+        Expr relaxed_cond = relax_condition_using_bounds(cond, inner_loop_vars, bound_vars, &tight);
+        if (!relaxed_cond.same_as(cond)) {
+            // There may be new Ands, Ors, Nots, etc
+            return simplify_to_true(relaxed_cond);
         }
+        cond = relaxed_cond;
 
         // Determine the minimum or maximum value of the loop var for
         // which this condition is true, and update min_max and
         // max_val accordingly.
 
-        debug(3) << "Condition: " << cond << "\n";
+        debug(3) << "  Solving condition: " << cond << "\n";
         Expr solved = solve_expression(cond, loop_var, bound_vars);
-        debug(3) << "Solved condition for " <<  loop_var << ": " << solved << "\n";
+        debug(3) << "  Solved condition for " <<  loop_var << ": " << solved << "\n";
 
         // The solve failed.
         if (!solved.defined()) {
@@ -338,69 +426,30 @@ private:
         // Peel off lets.
         vector<pair<string, Expr>> new_lets;
         while (const Let *let = solved.as<Let>()) {
-            Interval i = bounds_of_expr_in_scope(let->value, inner_loop_vars);
-            if (i.min.defined() && i.min.same_as(i.max)) {
-                new_lets.push_back(make_pair(let->name, i.min));
-            } else {
-                string min_name = unique_name(let->name + ".min", false);
-                string max_name = unique_name(let->name + ".max", false);
-                Expr min_var, max_var;
-                if (i.min.defined()) {
-                    min_var = Variable::make(let->value.type(), min_name);
-                    new_lets.push_back(make_pair(min_name, i.min));
-                }
-                if (i.max.defined()) {
-                    max_var = Variable::make(let->value.type(), max_name);
-                    new_lets.push_back(make_pair(max_name, i.max));
-                }
-                inner_loop_vars.push(let->name, Interval(min_var, max_var));
-            }
+            new_lets.push_back(make_pair(let->name, let->value));
             solved = let->body;
         }
 
         bool success = false;
         if (const LT *lt = solved.as<LT>()) {
             if (is_loop_var(lt->a)) {
-                // Take the min over any inner loop vars on the
-                // RHS. If the inequality holds for this smaller value
-                // then it holds for all possible values of the inner
-                // loop variable.
-                Interval rhs = bounds_of_expr_in_scope(lt->b, inner_loop_vars);
-                if (rhs.max.defined()) {
-                    tight &= rhs.min.same_as(rhs.max);
-                    max_vals.push_back(rhs.min);
-                    success = true;
-                }
+                max_vals.push_back(lt->b);
+                success = true;
             }
         } else if (const LE *le = solved.as<LE>()) {
             if (is_loop_var(le->a)) {
-                // Take the min over any inner loop vars
-                Interval rhs = bounds_of_expr_in_scope(le->b + 1, inner_loop_vars);
-                if (rhs.max.defined()) {
-                    tight &= rhs.min.same_as(rhs.max);
-                    max_vals.push_back(rhs.min);
-                    success = true;
-                }
+                max_vals.push_back(le->b + 1);
+                success = true;
             }
         } else if (const GE *ge = solved.as<GE>()) {
             if (is_loop_var(ge->a)) {
-                // Take the max over any inner loop vars
-                Interval rhs = bounds_of_expr_in_scope(ge->b, inner_loop_vars);
-                if (rhs.min.defined()) {
-                    tight &= rhs.min.same_as(rhs.max);
-                    min_vals.push_back(rhs.max);
-                    success = true;
-                }
+                min_vals.push_back(ge->b);
+                success = true;
             }
         } else if (const GT *gt = solved.as<GT>()) {
             if (is_loop_var(gt->a)) {
-                // Take the max over any inner loop vars
-                Interval rhs = bounds_of_expr_in_scope(gt->b + 1, inner_loop_vars);
-                if (rhs.min.defined()) {
-                    tight &= rhs.min.same_as(rhs.max);
-                    min_vals.push_back(rhs.max);
-                    success = true;
-                }
+                min_vals.push_back(gt->b + 1);
+                success = true;
             }
         }
 
@@ -408,7 +457,7 @@ private:
             containing_lets.insert(containing_lets.end(), new_lets.begin(), new_lets.end());
             return const_true();
         } else {
-            debug(3) << "Failed to apply constraint (3): " << cond << "\n";
+            debug(3) << "  Failed to apply constraint (3): " << cond << "\n";
             return cond;
         }
     }
@@ -527,12 +576,15 @@ private:
         size_t old_num_min_vals = min_vals.size();
         size_t old_num_max_vals = max_vals.size();
 
+        debug(3) << "Original condition: " << op->condition << "\n";
+
         if (a_likely && !b_likely) {
             // Figure out bounds on the loop var which makes the condition true.
             debug(3) << "Attempting to make this condition true: " << condition << "\n";
             tight = true;
             Expr new_condition = simplify_to_true(condition);
-            debug(3) << "Attempted to make this condition true: " << condition << " Got: " << new_condition << "\n";
+            debug(3) << "  Attempted to make this condition true: " << condition << "\n"
+                     << "  Got: " << new_condition << "\n";
             if (is_one(new_condition)) {
                 // We succeeded!
                 if (!found_simplification_in_children && tight) {
@@ -546,14 +598,19 @@ private:
                 }
                 return true_value;
             } else {
-                // Might have partially succeeded, so still use the new condition.
-                return SelectOrIf::make(new_condition, true_value, false_value);
+                // TODO: new_condition isn't usable here, because
+                // (e.g.) we've relaxed it using bounds. What if we
+                // mined some min_vals and max_vals? The benefits are
+                // not represented here. Ameliorated by expanding
+                // selects of compound bools below.
+                return SelectOrIf::make(condition, true_value, false_value);
             }
         } else if (b_likely && !a_likely) {
             debug(3) << "Attempting to make this condition false: " << condition << "\n";
             tight = true;
             Expr new_condition = simplify_to_false(condition);
-            debug(3) << "Attempted to make this condition false: " << condition << " Got: " << new_condition << "\n";
+            debug(3) << "  Attempted to make this condition false: " << condition << "\n"
+                     << "  Got: " << new_condition << "\n";
             if (is_zero(new_condition)) {
                 if (!found_simplification_in_children && tight) {
                     Replacement r = {op->condition, const_true()};
@@ -566,7 +623,7 @@ private:
                 }
                 return false_value;
             } else {
-                return SelectOrIf::make(new_condition, true_value, false_value);
+                return SelectOrIf::make(condition, true_value, false_value);
             }
         } else if (condition.same_as(op->condition) &&
                    true_value.same_as(orig_true_value) &&
@@ -652,12 +709,37 @@ private:
     }
 };
 
+// Determine if a loop body is complex enough for an if statement to
+// be inconsequential in terms of overhead.
+class NonTrivialBody : public IRVisitor {
+    using IRVisitor::visit;
+
+    void visit(const For *op) {
+        IRVisitor::visit(op);
+        // If it contains a for loop of varying extent then an if is
+        // relatively cheap.
+        if (!is_const(op->extent)) {
+            result = true;
+        }
+    }
+public:
+    bool result = false;
+};
+
+bool non_trivial_body(Stmt s) {
+    NonTrivialBody b;
+    s.accept(&b);
+    return b.result;
+}
+
 class PartitionLoops : public IRMutator {
     using IRMutator::visit;
 
     void visit(const For *op) {
 
         Stmt body = op->body;
+
+        debug(3) << "\n**** Partitioning loop over " << op->name << "\n";
 
         FindSteadyState f(op->name);
         Stmt simpler_body = f.mutate(body);
@@ -683,6 +765,7 @@ class PartitionLoops : public IRMutator {
                 // then pull that out as a let statement.
                 min_steady = clamp(min_steady, op->min, op->min + op->extent);
                 string min_steady_name = op->name + ".prologue";
+                //lets.push_back(make_pair(min_steady_name, print(min_steady, op->name, "min_steady")));
                 lets.push_back(make_pair(min_steady_name, min_steady));
                 min_steady = Variable::make(Int(32), min_steady_name);
             } else {
@@ -695,6 +778,7 @@ class PartitionLoops : public IRMutator {
                 // statement.
                 max_steady = clamp(max_steady, min_steady, op->min + op->extent);
                 string max_steady_name = op->name + ".epilogue";
+                //lets.push_back(make_pair(max_steady_name, print(max_steady, op->name, "max_steady")));
                 lets.push_back(make_pair(max_steady_name, max_steady));
                 max_steady = Variable::make(Int(32), max_steady_name);
             } else {
@@ -709,15 +793,28 @@ class PartitionLoops : public IRMutator {
 
             Stmt new_loop;
 
+            bool should_partition_into_three = op->for_type == ForType::Serial;
+            if (make_prologue && make_epilogue && non_trivial_body(simpler_body)) {
+                // If the body is complex enough that the overhead of
+                // an 'if' statement is trivial, then don't partition
+                // into three - just inject an if-near-boundary
+                // statement.
+                should_partition_into_three = false;
+            }
 
-            if (op->for_type == ForType::Serial) {
+            if (should_partition_into_three) {
                 // Steady state.
                 new_loop = For::make(op->name, min_steady, max_steady - min_steady,
                                      op->for_type, op->device_api, simpler_body);
 
+                //string tag = unique_name('s');
+                //new_loop = Block::make(Evaluate::make(print(tag)), new_loop);
+
                 if (make_prologue) {
                     Stmt prologue = For::make(op->name, op->min, min_steady - op->min,
                                               op->for_type, op->device_api, body);
+                    //string tag = unique_name('p');
+                    //prologue = Block::make(Evaluate::make(print(tag)), prologue);
                     prologue = f.simplify_prologue(prologue);
                     new_loop = Block::make(prologue, new_loop);
                 }
@@ -725,34 +822,36 @@ class PartitionLoops : public IRMutator {
                 if (make_epilogue) {
                     Stmt epilogue = For::make(op->name, max_steady, op->min + op->extent - max_steady,
                                               op->for_type, op->device_api, body);
+
+                    //string tag = unique_name('e');
+                    //epilogue = Block::make(Evaluate::make(print(tag)), epilogue);
                     epilogue = f.simplify_epilogue(epilogue);
                     new_loop = Block::make(new_loop, epilogue);
                 }
             } else {
-                // For parallel for loops, we inject an if statement
-                // instead of splitting up the loop.
-                //
-                // TODO: If we have task parallel blocks, then we
-                // could split out the different bodies as we do
-                // above. Could be a big win on the GPU (generating
-                // separate kernels for the nasty cases near the
-                // boundaries).
+                // Inject an if statement instead of splitting up the
+                // loop.
                 //
                 // Rather than having a three-way if for prologue,
                 // steady state, or epilogue, we have a two-way if
                 // (steady-state or not), and don't bother doing
                 // bounds-based simplification of the prologue and
-                // epilogue.
-                internal_assert(op->for_type == ForType::Parallel);
+                // epilogue if both exist.
 
                 Expr loop_var = Variable::make(Int(32), op->name);
                 Expr in_steady;
                 if (make_prologue) {
                     in_steady = loop_var >= min_steady;
+                    if (!make_epilogue) {
+                        body = f.simplify_prologue(body);
+                    }
                 }
                 if (make_epilogue) {
                     Expr cond = loop_var < max_steady;
                     in_steady = in_steady.defined() ? (in_steady && cond) : cond;
+                    if (!make_prologue) {
+                        body = f.simplify_epilogue(body);
+                    }
                 }
                 if (in_steady.defined()) {
                     body = IfThenElse::make(in_steady, simpler_body, body);
@@ -947,9 +1046,54 @@ class RenormalizeGPULoops : public IRMutator {
 
 };
 
+// Expand selects of boolean conditions so that the partitioner can
+// consider them one-at-a-time.
+class ExpandSelects : public IRMutator {
+    using IRMutator::visit;
+
+    bool is_trivial(Expr e) {
+        return e.as<Variable>() || is_const(e);
+    }
+
+    void visit(const Select *op) {
+        Expr condition   = mutate(op->condition);
+        Expr true_value  = mutate(op->true_value);
+        Expr false_value = mutate(op->false_value);
+        if (const Or *o = condition.as<Or>()) {
+            if (is_trivial(true_value)) {
+                expr = mutate(Select::make(o->a, true_value, Select::make(o->b, true_value, false_value)));
+            } else {
+                string var_name = unique_name('t');
+                Expr var = Variable::make(true_value.type(), var_name);
+                expr = mutate(Select::make(o->a, var, Select::make(o->b, var, false_value)));
+                expr = Let::make(var_name, true_value, expr);
+            }
+        } else if (const And *a = condition.as<And>()) {
+            if (is_trivial(false_value)) {
+                expr = mutate(Select::make(a->a, Select::make(a->b, true_value, false_value), false_value));
+            } else {
+                string var_name = unique_name('t');
+                Expr var = Variable::make(true_value.type(), var_name);
+                expr = mutate(Select::make(a->a, Select::make(a->b, true_value, var), var));
+                expr = Let::make(var_name, true_value, expr);
+            }
+        } else if (const Not *n = condition.as<Not>()) {
+            expr = mutate(Select::make(n->a, false_value, true_value));
+        } else if (condition.same_as(op->condition) &&
+                   true_value.same_as(op->true_value) &&
+                   false_value.same_as(op->false_value)) {
+            expr = op;
+        } else {
+            expr = Select::make(condition, true_value, false_value);
+        }
+    }
+};
+
+
 }
 
 Stmt partition_loops(Stmt s) {
+    s = ExpandSelects().mutate(s);
     s = PartitionLoops().mutate(s);
     s = RenormalizeGPULoops().mutate(s);
     s = RemoveLikelyTags().mutate(s);
