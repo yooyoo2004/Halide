@@ -108,16 +108,19 @@ int main(int argc, char **argv) {
 
     // The slicing applies to every loop level starting from the
     // outermost one, but only recursively simplifies the clean steady
-    // state. So adding a boundary condition to a 2D computation will
-    // produce 5 code paths for the top, bottom, left, right, and
-    // center of the image.
+    // state. It either splits things into two (near boundary vs not
+    // near boundary) or three (start, middle, end), depending on what
+    // it thinks the overhead of an if statement would be. So adding a
+    // boundary condition to a 2D computation will produce 4 code
+    // paths for the top + bottom, left, right, and center of the
+    // image.
     {
         Var y;
         Func g;
         g(x, y) = x + y;
         g.compute_root();
         Func h = BoundaryConditions::mirror_image(g, 0, 10, 0, 10);
-        count_partitions(h, 5);
+        count_partitions(h, 4);
     }
 
     // If you split and also have a boundary condition, or have
@@ -197,15 +200,17 @@ int main(int argc, char **argv) {
         // to make things harder.
         RDom r(0, 5);
 
+        const int N = 25;
+
         // Make some nasty expressions to compare to.
-        Expr e[25];
+        Expr e[N];
         e[0] = y;
-        for (int i = 1; i < 25; i++) {
+        for (int i = 1; i < N; i++) {
             e[i] = e[i-1] * e[i-1] + y + r;
         }
         // Make a nasty condition that uses all of these.
         Expr nasty = cast<bool>(1);
-        for (int i = 0; i < 25; i++) {
+        for (int i = 0; i < N; i++) {
             nasty = nasty && (x*(i+1) < e[i]);
         }
 

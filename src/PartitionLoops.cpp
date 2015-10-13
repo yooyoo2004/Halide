@@ -149,7 +149,6 @@ class RelaxConditionUsingBounds : public IRMutator {
         // condition or min/max args - they get lifted out before this
         // point. So we'll just substitute the bounds in directly if
         // the let value varies.
-
         Expr value = mutate(op->value);
         Expr body;
         Expr value_max = make_bigger(value);
@@ -404,7 +403,7 @@ private:
         }
 
         Expr relaxed_cond = relax_condition_using_bounds(cond, inner_loop_vars, bound_vars, &tight);
-        if (!relaxed_cond.same_as(cond)) {
+        if (!equal(relaxed_cond, cond)) {
             // There may be new Ands, Ors, Nots, etc
             return simplify_to_true(relaxed_cond);
         }
@@ -647,32 +646,65 @@ private:
         Expr value = mutate(op->value);
         StmtOrExpr body;
 
-        bool pushed_bounds = false;
-        bound_vars.push(op->name, value);
-        Interval i;
-        string min_name = unique_name(op->name + ".min", false);
-        string max_name = unique_name(op->name + ".max", false);
         if (value.type().is_scalar()) {
             // If the value depends on a loop var, then we need to
             // consider it as varying.
-            i = bounds_of_expr_in_scope(value, inner_loop_vars);
-            if (!i.max.same_as(value) || !i.min.same_as(value)) {
-                pushed_bounds = true;
-                inner_loop_vars.push(op->name, i);
+            Interval i = bounds_of_expr_in_scope(value, inner_loop_vars);
+            if (!i.max.same_as(i.min)) {
+                string min_name = unique_name(op->name + ".min", false);
+                string max_name = unique_name(op->name + ".max", false);
+                Expr min_var, max_var;
+                if (i.min.defined()) {
+                    i.min = simplify(common_subexpression_elimination(i.min));
+                    if (is_const(i.min) || i.min.as<Variable>()) {
+                        min_var = i.min;
+                        i.min = Expr();
+                    } else {
+                        min_var = Variable::make(value.type(), min_name);
+                    }
+                }
+                if (i.max.defined()) {
+                    i.max = simplify(common_subexpression_elimination(i.max));
+                    if (is_const(i.max) || i.max.as<Variable>()) {
+                        max_var = i.max;
+                        i.max = Expr();
+                    } else {
+                        max_var = Variable::make(value.type(), max_name);
+                    }
+                }
+
+                inner_loop_vars.push(op->name, Interval(min_var, max_var));
+                bound_vars.push(op->name, value);
+                body = mutate(op->body);
+                bound_vars.pop(op->name);
+                inner_loop_vars.pop(op->name);
+
+                StmtOrExpr result = body;
+                if (stmt_or_expr_uses_var(result, op->name)) {
+                    result = LetStmtOrLet::make(op->name, value, body);
+                }
+                if (i.min.defined() && stmt_or_expr_uses_var(result, min_name)) {
+                    result = LetStmtOrLet::make(min_name, i.min, result);
+                }
+                if (i.max.defined() && stmt_or_expr_uses_var(result, max_name)) {
+                    result = LetStmtOrLet::make(max_name, i.max, result);
+                }
+                return result;
             }
         }
+
+        bound_vars.push(op->name, value);
         body = mutate(op->body);
         bound_vars.pop(op->name);
-        if (pushed_bounds) {
-            inner_loop_vars.pop(op->name);
-        }
 
         StmtOrExpr result;
 
         if (value.same_as(op->value) && body.same_as(op->body)) {
             result = op;
-        } else {
+        } else if (stmt_or_expr_uses_var(body, op->name)) {
             result = LetStmtOrLet::make(op->name, value, body);
+        } else {
+            result = body;
         }
 
         return result;

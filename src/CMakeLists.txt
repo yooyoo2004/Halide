@@ -225,7 +225,6 @@ set(HEADER_FILES
   EarlyFree.h
   Error.h
   Expr.h
-  ExprUsesVar.h
   Extern.h
   FastIntegerDivide.h
   FindCalls.h
