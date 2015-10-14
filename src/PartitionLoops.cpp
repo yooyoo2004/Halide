@@ -171,7 +171,8 @@ class RelaxConditionUsingBounds : public IRMutator {
     }
 
 public:
-    RelaxConditionUsingBounds(const Scope<Interval> &parent_scope, const Scope<Expr> &parent_bound_vars) {
+    RelaxConditionUsingBounds(const Scope<Interval> &parent_scope,
+                              const Scope<Expr> &parent_bound_vars) {
         scope.set_containing_scope(&parent_scope);
         bound_vars.set_containing_scope(&parent_bound_vars);
     }
@@ -183,7 +184,10 @@ public:
 // the output expr implies the input expr. Sets 'tight' to false if a
 // change was made (i.e. the output implies the input, but the input
 // does not imply the output).
-Expr relax_condition_using_bounds(Expr e, const Scope<Interval> &varying, const Scope<Expr> &fixed, bool *tight) {
+Expr relax_condition_using_bounds(Expr e,
+                                  const Scope<Interval> &varying,
+                                  const Scope<Expr> &fixed,
+                                  bool *tight) {
     RelaxConditionUsingBounds r(varying, fixed);
     Expr out = r.mutate(e);
     if (!out.same_as(e)) {
@@ -192,6 +196,110 @@ Expr relax_condition_using_bounds(Expr e, const Scope<Interval> &varying, const 
     }
     return out;
 }
+
+
+
+class ExpandMinMaxComparisons : public IRMutator {
+    Scope<int> loop_vars;
+    const Scope<Expr> &bound_vars;
+
+    using IRMutator::visit;
+
+    void visit(const Let *op) {
+        Expr value = mutate(op->value);
+        Expr body;
+        if (expr_uses_vars(value, loop_vars, bound_vars)) {
+            loop_vars.push(op->name, 0);
+            body = mutate(op->body);
+            loop_vars.pop(op->name);
+        } else {
+            body = mutate(op->body);
+        }
+
+        if (value.same_as(op->value) && body.same_as(op->body)) {
+            expr = op;
+        } else {
+            expr = Let::make(op->name, value, body);
+        }
+    }
+
+    template<typename Cmp, bool lt_or_le>
+    void visit_cmp(const Cmp *op) {
+        const Min *min_a = op->a.template as<Min>();
+        const Max *max_a = op->a.template as<Max>();
+        Expr a, b, c = op->b;
+        Expr a_dominates_b;
+        if (min_a) {
+            a = min_a->a; b = min_a->b;
+            a_dominates_b = a <= b;
+        } else if (max_a) {
+            a = max_a->a; b = max_a->b;
+            a_dominates_b = a >= b;
+        } else {
+            expr = op;
+            return;
+        }
+
+        bool a_uses_var = expr_uses_vars(a, loop_vars, bound_vars);
+        bool b_uses_var = expr_uses_vars(b, loop_vars, bound_vars);
+
+        // We want to construct expressions that exactly encode the
+        // original condition, but are easy to make true or make false
+        // by placing limits on a. The solver has already moved
+        // everything as far left as possible, so if this is going to
+        // work then a will already use the var and b will not.
+        if (a_uses_var && !b_uses_var) {
+            if ((min_a && lt_or_le) ||
+                (max_a && !lt_or_le)) {                    
+                // min(a, b) < c <=> (a < c) || (b < c && a >= b)
+                // Can make true by setting a < c
+                // Can make false by setting c <= a < b
+
+                // max(a, b) > c <=> (a > c) || (b > c && a <= b)
+                // Can make true by setting a < c
+                // Can make false by setting c <= a < b
+                expr = (Cmp::make(a, c) ||
+                        (Cmp::make(b, c) && a_dominates_b));
+            } else if ((max_a && lt_or_le) ||
+                       (min_a && !lt_or_le)) {
+                // max(a, b) < c <=> (a < c) && (b < c || a >= b)
+                // Can make true by setting b <= a < c
+                // Can make false by setting a >= c
+
+                // min(a, b) > c <=> (a > c) && (b > c || a <= b)
+                // Can make true by setting b <= a < c
+                // Can make false by setting a >= c
+                expr = (Cmp::make(a, c) &&
+                        (Cmp::make(b, c) || a_dominates_b));
+            } else {
+                expr = op;
+            }
+        } else {
+            expr = op;
+        }
+    }
+
+    void visit(const LT *op) {
+        visit_cmp<LT, true>(op);
+    }
+
+    void visit(const LE *op) {
+        visit_cmp<LE, true>(op);
+    }
+
+    void visit(const GT *op) {
+        visit_cmp<GT, false>(op);
+    }
+
+    void visit(const GE *op) {
+        visit_cmp<GE, false>(op);
+    }
+
+public:
+    ExpandMinMaxComparisons(const string &lv, const Scope<Expr> &bv) : bound_vars(bv) {
+        loop_vars.push(lv, 0);
+    }
+};
 
 // Simplify an expression by assuming that certain mins, maxes, and
 // select statements always evaluate down one path for the bulk of a
@@ -351,12 +459,15 @@ private:
         if (const Broadcast *b = cond.as<Broadcast>()) {
             return simplify_to_false(b->value);
         } else if (const And *a = cond.as<And>()) {
-            // If we need an And to be false to make the
-            // simplification, then we take the union of the
-            // constraints even though taking either one of them would
-            // be sufficient. This makes the bound no longer tight.
+            // We need an And to be false to make the
+            // simplification. First try to make the LHS false.
             tight = false;
-            return make_and(simplify_to_false(a->a), simplify_to_false(a->b));
+            Expr lhs = simplify_to_false(a->a);
+            // If that worked, we don't need to derive a bound from
+            // the RHS
+            if (is_zero(lhs)) return lhs;
+            // If it didn't, continue into the RHS.
+            return make_and(lhs, simplify_to_false(a->b));
         } else if (const Or *o = cond.as<Or>()) {
             return make_or(simplify_to_false(o->a), simplify_to_false(o->b));
         } else if (const Not *n = cond.as<Not>()) {
@@ -368,7 +479,7 @@ private:
         } else if (const GT *gt = cond.as<GT>()) {
             return make_not(simplify_to_true(gt->a <= gt->b));
         } else if (const GE *ge = cond.as<GE>()) {
-            return make_not(simplify_to_true(ge->a > ge->b));
+            return make_not(simplify_to_true(ge->a < ge->b));
         } else if (const Variable *v = cond.as<Variable>()) {
             if (bound_vars.contains(v->name)) {
                 return simplify_to_false(bound_vars.get(v->name));
@@ -381,17 +492,17 @@ private:
 
     // Try to make a condition true by limiting the range of the loop variable
     Expr simplify_to_true(Expr cond) {
+        debug(3) << "  simplify_to_true(" << cond << ")\n";
         if (const Broadcast *b = cond.as<Broadcast>()) {
             return simplify_to_true(b->value);
         } else if (const And *a = cond.as<And>()) {
             return make_and(simplify_to_true(a->a), simplify_to_true(a->b));
         } else if (const Or *o = cond.as<Or>()) {
-            // If we need an Or to be true to make the
-            // simplification, then we take the union of the
-            // constraints even though taking either one of them would
-            // be sufficient. This makes the bound no longer tight.
+            // Equivalent logic to making an And false above.
             tight = false;
-            return make_or(simplify_to_true(o->a), simplify_to_true(o->b));
+            Expr lhs = simplify_to_true(o->a);
+            if (is_one(lhs)) return lhs;
+            return make_or(lhs, simplify_to_true(o->b));
         } else if (const Not *n = cond.as<Not>()) {
             return make_not(simplify_to_false(n->a));
         } else if (const Variable *v = cond.as<Variable>()) {
@@ -422,6 +533,12 @@ private:
             return cond;
         }
 
+        Expr expanded = ExpandMinMaxComparisons(loop_var, bound_vars).mutate(solved);
+        if (!equal(expanded, solved)) {
+            debug(3) << "  Expand min max comparisons: " << expanded << "\n";
+            return simplify_to_true(expanded);
+        }
+
         // Peel off lets.
         vector<pair<string, Expr>> new_lets;
         while (const Let *let = solved.as<Let>()) {
@@ -433,21 +550,25 @@ private:
         if (const LT *lt = solved.as<LT>()) {
             if (is_loop_var(lt->a)) {
                 max_vals.push_back(lt->b);
+                debug(3) << " New max val: " << lt->b << "\n";
                 success = true;
             }
         } else if (const LE *le = solved.as<LE>()) {
             if (is_loop_var(le->a)) {
                 max_vals.push_back(le->b + 1);
+                debug(3) << " New max val: " << (le->b + 1) << "\n";
                 success = true;
             }
         } else if (const GE *ge = solved.as<GE>()) {
             if (is_loop_var(ge->a)) {
                 min_vals.push_back(ge->b);
+                debug(3) << " New min val: " << ge->b << "\n";
                 success = true;
             }
         } else if (const GT *gt = solved.as<GT>()) {
             if (is_loop_var(gt->a)) {
                 min_vals.push_back(gt->b + 1);
+                debug(3) << " New min val: " << (gt->b + 1) << "\n";
                 success = true;
             }
         }
@@ -661,6 +782,7 @@ private:
                         i.min = Expr();
                     } else {
                         min_var = Variable::make(value.type(), min_name);
+                        bound_vars.push(min_name, i.min);
                     }
                 }
                 if (i.max.defined()) {
@@ -670,6 +792,7 @@ private:
                         i.max = Expr();
                     } else {
                         max_var = Variable::make(value.type(), max_name);
+                        bound_vars.push(max_name, i.max);
                     }
                 }
 
@@ -678,6 +801,13 @@ private:
                 body = mutate(op->body);
                 bound_vars.pop(op->name);
                 inner_loop_vars.pop(op->name);
+
+                if (i.min.defined()) {
+                    bound_vars.pop(min_name);
+                }
+                if (i.max.defined()) {
+                    bound_vars.pop(max_name);
+                }
 
                 StmtOrExpr result = body;
                 if (stmt_or_expr_uses_var(result, op->name)) {
@@ -797,7 +927,6 @@ class PartitionLoops : public IRMutator {
                 // then pull that out as a let statement.
                 min_steady = clamp(min_steady, op->min, op->min + op->extent);
                 string min_steady_name = op->name + ".prologue";
-                //lets.push_back(make_pair(min_steady_name, print(min_steady, op->name, "min_steady")));
                 lets.push_back(make_pair(min_steady_name, min_steady));
                 min_steady = Variable::make(Int(32), min_steady_name);
             } else {
@@ -810,7 +939,6 @@ class PartitionLoops : public IRMutator {
                 // statement.
                 max_steady = clamp(max_steady, min_steady, op->min + op->extent);
                 string max_steady_name = op->name + ".epilogue";
-                //lets.push_back(make_pair(max_steady_name, print(max_steady, op->name, "max_steady")));
                 lets.push_back(make_pair(max_steady_name, max_steady));
                 max_steady = Variable::make(Int(32), max_steady_name);
             } else {
@@ -886,6 +1014,8 @@ class PartitionLoops : public IRMutator {
                     }
                 }
                 if (in_steady.defined()) {
+                    // string tag = unique_name('n');
+                    // body = Block::make(Evaluate::make(print(tag)), body);
                     body = IfThenElse::make(in_steady, simpler_body, body);
                 }
 
