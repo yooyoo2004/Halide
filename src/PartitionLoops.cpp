@@ -191,6 +191,7 @@ Expr relax_condition_using_bounds(Expr e,
     RelaxConditionUsingBounds r(varying, fixed);
     Expr out = r.mutate(e);
     if (!out.same_as(e)) {
+        debug(3) << "  Condition relaxed using bounds. No longer tight: " << out << "\n";
         *tight = false;
         out = simplify(out);
     }
@@ -250,7 +251,7 @@ class ExpandMinMaxComparisons : public IRMutator {
         // work then a will already use the var and b will not.
         if (a_uses_var && !b_uses_var) {
             if ((min_a && lt_or_le) ||
-                (max_a && !lt_or_le)) {                    
+                (max_a && !lt_or_le)) {
                 // min(a, b) < c <=> (a < c) || (b < c && a >= b)
                 // Can make true by setting a < c
                 // Can make false by setting c <= a < b
@@ -342,6 +343,7 @@ public:
     }
 
     Stmt simplify_prologue(Stmt s) {
+        debug(3) << "  Simplifying prologue " << min_vals.size() << ", " << prologue_replacements.size() << "\n";
         if (min_vals.size() == 1 &&
             prologue_replacements.size() == 1) {
             // If there is more than one min_val, then the boundary
@@ -461,6 +463,7 @@ private:
         } else if (const And *a = cond.as<And>()) {
             // We need an And to be false to make the
             // simplification. First try to make the LHS false.
+            debug(3) << "  Simplifying And to false. No longer tight\n";
             tight = false;
             Expr lhs = simplify_to_false(a->a);
             // If that worked, we don't need to derive a bound from
@@ -499,6 +502,7 @@ private:
             return make_and(simplify_to_true(a->a), simplify_to_true(a->b));
         } else if (const Or *o = cond.as<Or>()) {
             // Equivalent logic to making an And false above.
+            debug(3) << "  Simplifying Or to true. No longer tight\n";
             tight = false;
             Expr lhs = simplify_to_true(o->a);
             if (is_one(lhs)) return lhs;
@@ -689,10 +693,6 @@ private:
         bool b_likely = likely;
         likely = old_likely || a_likely || b_likely;
 
-        bool found_simplification_in_children =
-            (min_vals.size() != orig_num_min_vals) ||
-            (max_vals.size() != orig_num_max_vals);
-
         size_t old_num_min_vals = min_vals.size();
         size_t old_num_max_vals = max_vals.size();
 
@@ -707,12 +707,15 @@ private:
                      << "  Got: " << new_condition << "\n";
             if (is_one(new_condition)) {
                 // We succeeded!
-                if (!found_simplification_in_children && tight) {
+                debug(3) << "  tight = " << tight << "\n";
+                if (tight) {
                     Replacement r = {op->condition, const_false()};
-                    if (min_vals.size() > old_num_min_vals) {
+                    if (min_vals.size() > old_num_min_vals &&
+                        old_num_min_vals == orig_num_min_vals) {
                         prologue_replacements.push_back(r);
                     }
-                    if (max_vals.size() > old_num_max_vals) {
+                    if (max_vals.size() > old_num_max_vals &&
+                        old_num_max_vals == orig_num_max_vals) {
                         epilogue_replacements.push_back(r);
                     }
                 }
@@ -732,12 +735,14 @@ private:
             debug(3) << "  Attempted to make this condition false: " << condition << "\n"
                      << "  Got: " << new_condition << "\n";
             if (is_zero(new_condition)) {
-                if (!found_simplification_in_children && tight) {
+                if (tight) {
                     Replacement r = {op->condition, const_true()};
-                    if (min_vals.size() > old_num_min_vals) {
+                    if (min_vals.size() > old_num_min_vals &&
+                        old_num_min_vals == orig_num_min_vals) {
                         prologue_replacements.push_back(r);
                     }
-                    if (max_vals.size() > old_num_max_vals) {
+                    if (max_vals.size() > old_num_max_vals &&
+                        old_num_max_vals == orig_num_max_vals) {
                         epilogue_replacements.push_back(r);
                     }
                 }
