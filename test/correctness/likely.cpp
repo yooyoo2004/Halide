@@ -108,11 +108,9 @@ int main(int argc, char **argv) {
 
     // The slicing applies to every loop level starting from the
     // outermost one, but only recursively simplifies the clean steady
-    // state. It either splits things into two (near boundary vs not
-    // near boundary) or three (start, middle, end), depending on what
-    // it thinks the overhead of an if statement would be. So adding a
-    // boundary condition to a 2D computation will produce 4 code
-    // paths for the top + bottom, left, right, and center of the
+    // state. It either splits things three (start, middle, end). So
+    // adding a boundary condition to a 2D computation will produce 5
+    // code paths for the top, bottom, left, right, and center of the
     // image.
     {
         Var y;
@@ -120,7 +118,7 @@ int main(int argc, char **argv) {
         g(x, y) = x + y;
         g.compute_root();
         Func h = BoundaryConditions::mirror_image(g, 0, 10, 0, 10);
-        count_partitions(h, 4);
+        count_partitions(h, 5);
     }
 
     // If you split and also have a boundary condition, or have
