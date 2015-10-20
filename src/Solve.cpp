@@ -4,6 +4,7 @@
 #include "IREquality.h"
 #include "Substitute.h"
 #include "CSE.h"
+#include "ExprUsesVar.h"
 
 namespace Halide {
 namespace Internal {
@@ -530,6 +531,249 @@ private:
 
 };
 
+Expr pos_inf = Variable::make(Int(32), "pos_inf");
+Expr neg_inf = Variable::make(Int(32), "neg_inf");
+
+Expr interval_max(Expr a, Expr b) {
+    if (a.same_as(pos_inf) || b.same_as(pos_inf)) {
+        return pos_inf;
+    } else if (a.same_as(neg_inf)) {
+        return b;
+    } else if (b.same_as(neg_inf)) {
+        return a;
+    } else {
+        return max(a, b);
+    }
+}
+
+Expr interval_min(Expr a, Expr b) {
+    if (a.same_as(neg_inf) || b.same_as(neg_inf)) {
+        return neg_inf;
+    } else if (a.same_as(pos_inf)) {
+        return b;
+    } else if (b.same_as(pos_inf)) {
+        return a;
+    } else {
+        return min(a, b);
+    }
+}
+
+Interval interval_intersection(Interval ia, Interval ib) {
+    return Interval(interval_max(ia.min, ib.min), interval_min(ia.max, ib.max));
+}
+
+Interval interval_union(Interval ia, Interval ib) {
+    return Interval(interval_min(ia.min, ib.min), interval_max(ia.max, ib.max));
+}
+
+class SolveForInterval : public IRVisitor {
+
+    // The var we're solving for
+    const string &var;
+
+    // Whether we're trying to make the condition true or false
+    bool target = true;
+
+    // Whether we want an outer bound or an inner bound
+    bool outer;
+
+    // Track lets expressions. Initially empty.
+    Scope<Expr> scope;
+
+    // Lazily populated with solved intervals for boolean sub-expressions.
+    map<pair<string, bool>, Interval> solved_vars;
+
+    // Has this expression already been rearranged by solve_expression?
+    bool already_solved = false;
+
+    using IRVisitor::visit;
+
+    void fail() {
+        if (outer) {
+            // If we're looking for an outer bound, then return an infinite interval.
+            result = Interval(neg_inf, pos_inf);
+        } else {
+            // If we're looking for an inner bound, return an empty interval
+            result = Interval(pos_inf, neg_inf);
+        }
+    }
+
+    void visit(const UIntImm *op) {
+        internal_assert(op->type.is_bool());
+        if ((op->value && target) ||
+            (!op->value && !target)) {
+            result = Interval(neg_inf, pos_inf);
+        } else if ((!op->value && target) ||
+                   (op->value && !target)) {
+            result = Interval(pos_inf, neg_inf);
+        } else {
+            fail();
+        }
+    }
+
+    void visit(const And *op) {
+        op->a.accept(this);
+        Interval ia = result;
+        op->b.accept(this);
+        Interval ib = result;
+        if (target) {
+            result = interval_intersection(ia, ib);
+        } else {
+            result = interval_union(ia, ib);
+        }
+    }
+
+    void visit(const Or *op) {
+        op->a.accept(this);
+        Interval ia = result;
+        op->b.accept(this);
+        Interval ib = result;
+        if (!target) {
+            result = interval_intersection(ia, ib);
+        } else {
+            result = interval_union(ia, ib);
+        }
+    }
+
+    void visit(const Not *op) {
+        target = !target;
+        op->a.accept(this);
+        target = !target;
+    }
+
+    void visit(const Let *op) {
+        internal_assert(op->type.is_bool());
+        // If it's a bool, we might need to know the intervals over
+        // which it's definitely or definitely false. We'll do this
+        // lazily and populate a map. See the Variable visitor.
+        scope.push(op->name, op->value);
+        op->body.accept(this);
+        scope.pop(op->name);
+        if (result.min.defined() && expr_uses_var(result.min, op->name)) {
+            result.min = Let::make(op->name, op->value, result.min);
+        }
+        if (result.max.defined() && expr_uses_var(result.max, op->name)) {
+            result.max = Let::make(op->name, op->value, result.max);
+        }
+    }
+
+    void visit(const Variable *op) {
+        internal_assert(op->type.is_bool());
+        if (scope.contains(op->name)) {
+            auto key = make_pair(op->name, target);
+            auto it = solved_vars.find(key);
+            if (it != solved_vars.end()) {
+                result = it->second;
+            } else {
+                scope.get(op->name).accept(this);
+                solved_vars[key] = result;
+            }
+        } else {
+            fail();
+        }
+    }
+
+    void visit(const LT *lt) {
+        // Normalize to le
+        Expr cond = lt->a <= (lt->b - 1);
+        cond.accept(this);
+    }
+
+    void visit(const GT *gt) {
+        // Normalize to ge
+        Expr cond = gt->a >= (gt->b + 1);
+        cond.accept(this);
+    }
+
+    void visit(const LE *le) {
+        const Variable *v = le->a.as<Variable>();
+        if (!already_solved) {
+            Expr solved = solve_expression(le, var, scope);
+            if (!solved.defined()) {
+                fail();
+            } else {
+                already_solved = true;
+                solved.accept(this);
+                already_solved = false;
+            }
+        } else if (v && v->name == var) {
+            if (target) {
+                result = Interval(neg_inf, le->b);
+            } else {
+                result = Interval(le->b + 1, pos_inf);
+            }
+        } else if (const Max *max_a = le->a.as<Max>()) {
+            // Rewrite (max(a, b) <= c) <==> (a <= c && (b <= c || a >= b))
+            // Also allow re-solving the new equations.
+            Expr a = max_a->a, b = max_a->b, c = le->b;
+            Expr cond = (a <= c) && (b <= c || a >= b);
+            already_solved = false;
+            cond.accept(this);
+            already_solved = true;
+        } else if (const Min *min_a = le->a.as<Min>()) {
+            // Rewrite (min(a, b) <= c) <==> (a <= c || (b <= c && a >= b))
+            Expr a = min_a->a, b = min_a->b, c = le->b;
+            Expr cond = (a <= c) || (b <= c && a >= b);
+            already_solved = false;
+            cond.accept(this);
+            already_solved = true;
+        } else {
+            fail();
+        }
+    }
+
+    void visit(const GE *ge) {
+        const Variable *v = ge->a.as<Variable>();
+        if (!already_solved) {
+            Expr solved = solve_expression(ge, var, scope);
+            if (!solved.defined()) {
+                fail();
+            } else {
+                already_solved = true;
+                solved.accept(this);
+                already_solved = false;
+            }
+        } else if (v && v->name == var) {
+            if (target) {
+                result = Interval(ge->b, pos_inf);
+            } else {
+                result = Interval(neg_inf, ge->b - 1);
+            }
+        } else if (const Max *max_a = ge->a.as<Max>()) {
+            // Rewrite (max(a, b) >= c) <==> (a >= c || (b >= c && a <= b))
+            // Also allow re-solving the new equations.
+            Expr a = max_a->a, b = max_a->b, c = ge->b;
+            Expr cond = (a >= c) || (b >= c && a <= b);
+            already_solved = false;
+            cond.accept(this);
+            already_solved = true;
+        } else if (const Min *min_a = ge->a.as<Min>()) {
+            // Rewrite (min(a, b) >= c) <==> (a >= c && (b >= c || a <= b))
+            Expr a = min_a->a, b = min_a->b, c = ge->b;
+            Expr cond = (a >= c) && (b >= c || a <= b);
+            already_solved = false;
+            cond.accept(this);
+            already_solved = true;
+        } else {
+            fail();
+        }
+    }
+
+    void visit(const EQ *op) {
+        fail();
+    }
+
+    void visit(const NE *op) {
+        fail();
+    }
+
+public:
+    Interval result;
+
+    SolveForInterval(const string &v, bool o) : var(v), outer(o) {}
+
+};
+
 } // Anonymous namespace
 
 Expr solve_expression(Expr e, const std::string &variable, const Scope<Expr> &scope) {
@@ -541,6 +785,35 @@ Expr solve_expression(Expr e, const std::string &variable, const Scope<Expr> &sc
         // The process has expanded lets. Re-collect them.
         return common_subexpression_elimination(e);
     }
+}
+
+
+Interval solve_for_inner_interval(Expr c, const std::string &var) {
+    SolveForInterval s(var, false);
+    c.accept(&s);
+    return s.result;
+}
+
+Interval solve_for_outer_interval(Expr c, const std::string &var) {
+    SolveForInterval s(var, true);
+    c.accept(&s);
+    return s.result;
+}
+
+bool interval_has_lower_bound(const Interval &i) {
+    return !i.min.same_as(neg_inf);
+}
+
+bool interval_has_upper_bound(const Interval &i) {
+    return !i.max.same_as(pos_inf);
+}
+
+bool interval_is_empty(const Interval &i) {
+    return i.min.same_as(pos_inf) || i.max.same_as(neg_inf);
+}
+
+bool interval_is_everything(const Interval &i) {
+    return i.min.same_as(neg_inf) && i.max.same_as(pos_inf);
 }
 
 namespace {
