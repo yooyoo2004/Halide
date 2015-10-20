@@ -335,6 +335,14 @@ private:
             expr = mutate(Select::make(select_a->condition,
                                        select_a->true_value + select_b->true_value,
                                        select_a->false_value + select_b->false_value));
+        } else if (select_a &&
+                   is_const(b) &&
+                   is_const(select_a->true_value) &&
+                   is_const(select_a->false_value)) {
+            // select(c, c1, c2) + c3 -> select(c, c1+c3, c2+c3)
+            expr = mutate(Select::make(select_a->condition,
+                                       select_a->true_value + b,
+                                       select_a->false_value + b));
         } else if (add_a &&
                    is_simple_const(add_a->b)) {
             // In ternary expressions, pull constants outside
@@ -593,6 +601,30 @@ private:
             expr = mutate(Select::make(select_a->condition,
                                        select_a->true_value - select_b->true_value,
                                        select_a->false_value - select_b->false_value));
+        } else if (select_a &&
+                   equal(select_a->true_value, b)) {
+            // select(c, a, b) - a -> select(c, 0, b-a)
+            expr = mutate(Select::make(select_a->condition,
+                                       make_zero(op->type),
+                                       select_a->false_value - select_a->true_value));
+        } else if (select_a &&
+                   equal(select_a->false_value, b)) {
+            // select(c, a, b) - b -> select(c, a-b, 0)
+            expr = mutate(Select::make(select_a->condition,
+                                       select_a->true_value - select_a->false_value,
+                                       make_zero(op->type)));
+        } else if (select_b &&
+                   equal(select_b->true_value, a)) {
+            // a - select(c, a, b) -> select(c, 0, a-b)
+            expr = mutate(Select::make(select_b->condition,
+                                       make_zero(op->type),
+                                       select_b->true_value - select_b->false_value));
+        } else if (select_b &&
+                   equal(select_b->false_value, a)) {
+            // b - select(c, a, b) -> select(c, b-a, 0)
+            expr = mutate(Select::make(select_b->condition,
+                                       select_b->false_value - select_b->true_value,
+                                       make_zero(op->type)));
         } else if (add_a && equal(add_a->b, b)) {
             // Ternary expressions where a term cancels
             expr = add_a->a;
@@ -1789,6 +1821,7 @@ private:
         const Add *add = delta.as<Add>();
         const Sub *sub = delta.as<Sub>();
         const Mul *mul = delta.as<Mul>();
+        const Select *sel = delta.as<Select>();
 
         Expr zero = make_zero(delta.type());
 
@@ -1859,6 +1892,12 @@ private:
                    no_overflow(mul->type)) {
             // Restrict to int32 and greater, because, e.g. 64 * 4 == 0 as a uint8.
             expr = mutate(mul->a == zero || mul->b == zero);
+        } else if (sel && is_zero(sel->true_value)) {
+            // select(c, 0, f) == 0 -> c || (f == 0)
+            expr = mutate(sel->condition || (sel->false_value == zero));
+        } else if (sel && is_zero(sel->false_value)) {
+            // select(c, t, 0) == 0 -> !c || (t == 0)
+            expr = mutate((!sel->condition) || (sel->true_value == zero));
         } else {
             expr = (delta == make_zero(delta.type()));
         }
@@ -3743,6 +3782,18 @@ void simplify_test() {
     check(min(8 - x, 2), 8 - max(x, 6));
     check(max(3, 77 - x), 77 - min(x, 74));
     check(min(max(8-x, 0), 8), 8 - max(min(x, 8), 0));
+
+    // Simplifications of selects
+    check(select(x == 3, 5, 7) + 7, select(x == 3, 12, 14));
+    check(select(x == 3, 5, 7) - 7, select(x == 3, -2, 0));
+    check(select(x == 3, 5, y) - y, select(x == 3, 5 - y, 0));
+    check(select(x == 3, y, 5) - y, select(x == 3, 0, 5 - y));
+    check(y - select(x == 3, 5, y), select(x == 3, y + (-5), 0));
+    check(y - select(x == 3, y, 5), select(x == 3, 0, y + (-5)));
+
+    check(select(x == 3, 5, 7) == 7, x != 3);
+    check(select(x == 3, z, y) == z, (x == 3) || (y == z));
+
 
     // Collapse some vector interleaves
     check(interleave_vectors({ramp(x, 2, 4), ramp(x+1, 2, 4)}), ramp(x, 1, 8));
