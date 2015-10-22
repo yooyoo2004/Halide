@@ -337,8 +337,8 @@ private:
                                        select_a->false_value + select_b->false_value));
         } else if (select_a &&
                    is_const(b) &&
-                   is_const(select_a->true_value) &&
-                   is_const(select_a->false_value)) {
+                   (is_const(select_a->true_value) ||
+                    is_const(select_a->false_value))) {
             // select(c, c1, c2) + c3 -> select(c, c1+c3, c2+c3)
             expr = mutate(Select::make(select_a->condition,
                                        select_a->true_value + b,
@@ -395,6 +395,30 @@ private:
                    is_negative_negatable_const(mul_a->b)) {
             // a*-x + b -> b - a*x
             expr = mutate(b - mul_a->a * (-mul_a->b));
+        } else if (mul_b &&
+                   !is_const(a) &&
+                   equal(a, mul_b->a) &&
+                   no_overflow(op->type)) {
+            // a + a*b -> a*(1 + b)
+            expr = mutate(a * (make_one(op->type) + mul_b->b));
+        } else if (mul_b &&
+                   !is_const(a) &&
+                   equal(a, mul_b->b) &&
+                   no_overflow(op->type)) {
+            // a + b*a -> (1 + b)*a
+            expr = mutate((make_one(op->type) + mul_b->a) * a);
+        } else if (mul_a &&
+                   !is_const(b) &&
+                   equal(mul_a->a, b) &&
+                   no_overflow(op->type)) {
+            // a*b + a -> a*(b + 1)
+            expr = mutate(mul_a->a * (mul_a->b + make_one(op->type)));
+        } else if (mul_a &&
+                   !is_const(b) &&
+                   equal(mul_a->b, b) &&
+                   no_overflow(op->type)) {
+            // a*b + b -> (a + 1)*b
+            expr = mutate((mul_a->a + make_one(op->type)) * b);
         } else if (no_overflow(op->type) &&
                    min_a &&
                    sub_a_b &&
@@ -655,6 +679,30 @@ private:
                    is_negative_negatable_const(mul_b->b)) {
             // a - b*-x -> a + b*x
             expr = mutate(a + mul_b->a * (-mul_b->b));
+        } else if (mul_b &&
+                   !is_const(a) &&
+                   equal(a, mul_b->a) &&
+                   no_overflow(op->type)) {
+            // a - a*b -> a*(1 - b)
+            expr = mutate(a * (make_one(op->type) - mul_b->b));
+        } else if (mul_b &&
+                   !is_const(a) &&
+                   equal(a, mul_b->b) &&
+                   no_overflow(op->type)) {
+            // a - b*a -> (1 - b)*a
+            expr = mutate((make_one(op->type) - mul_b->a) * a);
+        } else if (mul_a &&
+                   !is_const(b) &&
+                   equal(mul_a->a, b) &&
+                   no_overflow(op->type)) {
+            // a*b - a -> a*(b - 1)
+            expr = mutate(mul_a->a * (mul_a->b - make_one(op->type)));
+        } else if (mul_a &&
+                   !is_const(b) &&
+                   equal(mul_a->b, b) &&
+                   no_overflow(op->type)) {
+            // a*b - b -> (a - 1)*b
+            expr = mutate((mul_a->a - make_one(op->type)) * b);
         } else if (add_b &&
                    is_simple_const(add_b->b)) {
             expr = mutate((a - add_b->a) - add_b->b);
@@ -1895,9 +1943,15 @@ private:
         } else if (sel && is_zero(sel->true_value)) {
             // select(c, 0, f) == 0 -> c || (f == 0)
             expr = mutate(sel->condition || (sel->false_value == zero));
+        } else if (sel && is_const(sel->true_value)) {
+            // select(c, 4, f) == 0 -> !c && (f == 0)
+            expr = mutate((!sel->condition) && (sel->false_value == zero));
         } else if (sel && is_zero(sel->false_value)) {
             // select(c, t, 0) == 0 -> !c || (t == 0)
             expr = mutate((!sel->condition) || (sel->true_value == zero));
+        } else if (sel && is_const(sel->false_value)) {
+            // select(c, t, 4) == 0 -> c && (t == 0)
+            expr = mutate((sel->condition) && (sel->true_value == zero));
         } else {
             expr = (delta == make_zero(delta.type()));
         }
@@ -3318,6 +3372,15 @@ void simplify_test() {
     check(Expr(ramp(3.0f, 4.0f, 5)) * Expr(broadcast(2.0f, 5)), ramp(6.0f, 8.0f, 5));
     check(Expr(broadcast(3, 3)) * Expr(broadcast(2, 3)), broadcast(6, 3));
 
+    check(x*y + x, x*(y + 1));
+    check(x*y - x, x*(y + -1));
+    check(x + x*y, x*(y + 1));
+    check(x - x*y, x*(1 - y));
+    check(x*y + y, (x + 1)*y);
+    check(x*y - y, (x + -1)*y);
+    check(y + x*y, (x + 1)*y);
+    check(y - x*y, (1 - x)*y);
+
     check(0/x, 0);
     check(x/1, x);
     check(x/x, 1);
@@ -3794,6 +3857,9 @@ void simplify_test() {
     check(select(x == 3, 5, 7) == 7, x != 3);
     check(select(x == 3, z, y) == z, (x == 3) || (y == z));
 
+    check(select(x == 3, 4, 2) == 0, const_false());
+    check(select(x == 3, y, 2) == 4, (x == 3) && (y == 4));
+    check(select(x == 3, 2, y) == 4, (x != 3) && (y == 4));
 
     // Collapse some vector interleaves
     check(interleave_vectors({ramp(x, 2, 4), ramp(x+1, 2, 4)}), ramp(x, 1, 8));
