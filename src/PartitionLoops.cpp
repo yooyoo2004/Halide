@@ -253,6 +253,29 @@ class AndConditionOverDomain : public IRMutator {
         flipped = !flipped;
     }
 
+    void visit(const Variable *op) {
+        if (scope.contains(op->name) && op->type.is_bool()) {
+            Interval i = scope.get(op->name);
+            if (!flipped) {
+                if (i.min.defined()) {
+                    // Be conservative
+                    expr = i.min;
+                } else {
+                    expr = const_false();
+                }
+            } else {
+                if (i.max.defined()) {
+                    expr = i.max;
+                } else {
+                    expr = const_true();
+                }
+            }
+        } else {
+            expr = op;
+        }
+
+    }
+
     void visit(const Let *op) {
         // If it's a numeric value, we can just get the bounds of
         // it. If it's a boolean value yet, we don't know whether it
@@ -297,6 +320,13 @@ class AndConditionOverDomain : public IRMutator {
             expr = mutate(op->body);
             scope.pop(op->name);
 
+            if (expr_uses_var(expr, op->name)) {
+                if (op->value.type().is_bool()) {
+                    internal_error << "Should have removed inner boolean variable\n";
+                } else {
+                    expr = Let::make(op->name, value, expr);
+                }
+            }
             if (min_value.defined() && expr_uses_var(expr, min_name)) {
                 expr = Let::make(min_name, min_value, expr);
             }
@@ -318,10 +348,8 @@ class AndConditionOverDomain : public IRMutator {
 public:
     bool relaxed = false;
 
-    AndConditionOverDomain(const Scope<Interval> &parent_scope,
-                           const Scope<Expr> &parent_bound_vars) {
+    AndConditionOverDomain(const Scope<Interval> &parent_scope) {
         scope.set_containing_scope(&parent_scope);
-        bound_vars.set_containing_scope(&parent_bound_vars);
     }
 };
 
@@ -331,11 +359,13 @@ public:
 // the output expr implies the input expr. Sets 'tight' to false if a
 // change was made (i.e. the output implies the input, but the input
 // does not imply the output).
+//
+// The condition may be a vector condition, in which case we also
+// 'and' over the vector lanes, and return a scalar result.
 Expr and_condition_over_domain(Expr e,
                                const Scope<Interval> &varying,
-                               const Scope<Expr> &fixed,
                                bool *tight) {
-    AndConditionOverDomain r(varying, fixed);
+    AndConditionOverDomain r(varying);
     Expr out = r.mutate(e);
     if (r.relaxed) {
         debug(3) << "  Condition made more conservative using bounds. No longer tight:\n"
@@ -409,9 +439,7 @@ private:
         Simplification s = {condition, old, likely_val, unlikely_val, true};
         if (s.condition.type().is_vector()) {
             // Devectorize the condition
-            Scope<Expr> fixed;
-            Scope<Interval> varying;
-            s.condition = and_condition_over_domain(s.condition, varying, fixed, &s.tight);
+            s.condition = and_condition_over_domain(s.condition, Scope<Interval>::empty_scope(), &s.tight);
         }
         internal_assert(s.condition.type().is_scalar()) << s.condition << "\n";
         simplifications.push_back(s);
@@ -461,9 +489,8 @@ private:
         // Relax all the new conditions using the loop bounds
         for (Simplification &s : simplifications) {
             Scope<Interval> varying;
-            Scope<Expr> fixed;
             varying.push(op->name, Interval(op->min, op->min + op->extent - 1));
-            s.condition = and_condition_over_domain(s.condition, varying, fixed, &s.tight);
+            s.condition = and_condition_over_domain(s.condition, varying, &s.tight);
         }
 
         simplifications.insert(simplifications.end(), old.begin(), old.end());
@@ -908,6 +935,25 @@ class CollapseSelects : public IRMutator {
     }
 };
 
+/** Remove identity functions, even if they have side-effects. */
+class StripIdentities : public IRMutator {
+    using IRMutator::visit;
+
+    void visit(const Call *op) {
+        if (op->call_type == Call::Intrinsic &&
+            op->name == Call::trace_expr) {
+            expr = mutate(op->args[4]);
+        } else if (op->call_type == Call::Intrinsic &&
+                   (op->name == Call::return_second ||
+                    op->name == Call::likely)) {
+            expr = mutate(op->args.back());
+        } else {
+            IRMutator::visit(op);
+        }
+    }
+};
+
+
 /** Construct a sufficient condition for the visited stmt to be a no-op. */
 class IsNoOp : public IRVisitor {
     using IRVisitor::visit;
@@ -921,10 +967,9 @@ class IsNoOp : public IRVisitor {
             debug(3) << "Considering store: " << Stmt(op) << "\n";
             Expr equivalent_load = Load::make(op->value.type(), op->name, op->index, Buffer(), Parameter());
             Expr is_no_op = equivalent_load == op->value;
-            Scope<Interval> varying;
-            Scope<Expr> fixed;
-            debug(3) << "Anding condition over domain...\n";
-            is_no_op = and_condition_over_domain(is_no_op, varying, fixed, &tight);
+            is_no_op = StripIdentities().mutate(is_no_op);
+            debug(3) << "Anding condition over domain... " << is_no_op << "\n";
+            is_no_op = and_condition_over_domain(is_no_op, Scope<Interval>::empty_scope(), &tight);
             condition = condition && is_no_op;
             debug(3) << "Condition is now " << condition << "\n";
         }
@@ -934,13 +979,9 @@ class IsNoOp : public IRVisitor {
         op->body.accept(this);
         Scope<Interval> varying;
         varying.push(op->name, Interval(op->min, op->min + op->extent - 1));
-        // TODO: peel off lets into fixed or fix
-        // and_condition_over_domain to not explode with lots of
-        // varying lets.
-        Scope<Expr> fixed;
         condition = simplify(common_subexpression_elimination(condition));
         debug(3) << "About to relax over " << op->name << " : " << condition << "\n";
-        condition = and_condition_over_domain(condition, varying, fixed, &tight);
+        condition = and_condition_over_domain(condition, varying, &tight);
         debug(3) << "Relaxed: " << condition << "\n";
     }
 
@@ -963,11 +1004,20 @@ class IsNoOp : public IRVisitor {
 
     }
 
-    void visit(const LetStmt *op) {
+    template<typename LetOrLetStmt>
+    void visit_let(const LetOrLetStmt *op) {
         IRVisitor::visit(op);
         if (expr_uses_var(condition, op->name)) {
             condition = Let::make(op->name, op->value, condition);
         }
+    }
+
+    void visit(const LetStmt *op) {
+        visit_let(op);
+    }
+
+    void visit(const Let *op) {
+        visit_let(op);
     }
 
 public:
@@ -986,7 +1036,10 @@ class TrimNoOps : public IRMutator {
 
         IsNoOp is_no_op;
         body.accept(&is_no_op);
+        debug(3) << "Condition is " << is_no_op.condition << "\n";
         is_no_op.condition = simplify(simplify(common_subexpression_elimination(is_no_op.condition)));
+
+        debug(3) << "Simplified condition is " << is_no_op.condition << "\n";
 
         if (is_one(is_no_op.condition)) {
             // This loop is definitely useless
@@ -1002,6 +1055,16 @@ class TrimNoOps : public IRMutator {
         // can trim the loop bounds over which the loop does
         // something.
         Interval i = solve_for_outer_interval(!is_no_op.condition, op->name);
+
+        debug(3) << "Interval is: " << i.min << ", " << i.max << "\n";
+
+        // Simplify the body to take advantage of the fact that the
+        // loop range is now truncated
+        {
+            Scope<Interval> scope;
+            scope.push(op->name, i);
+            body = simplify(body, true, scope);
+        }
 
         string new_min_name = unique_name(op->name + ".new_min", false);
         string new_max_name = unique_name(op->name + ".new_max", false);
@@ -1047,8 +1110,8 @@ Stmt partition_loops(Stmt s) {
     s = PartitionLoops().mutate(s);
     s = RenormalizeGPULoops().mutate(s);
     s = RemoveLikelyTags().mutate(s);
-    s = TrimNoOps().mutate(s);
     s = CollapseSelects().mutate(s);
+    s = TrimNoOps().mutate(s);
     return s;
 }
 
