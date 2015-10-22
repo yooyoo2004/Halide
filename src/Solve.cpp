@@ -816,12 +816,42 @@ bool interval_is_everything(const Interval &i) {
     return i.min.same_as(neg_inf) && i.max.same_as(pos_inf);
 }
 
-namespace {
 
 // Testing code
-void check(Expr a, Expr b) {
+
+namespace {
+
+void check_solve(Expr a, Expr b) {
     Expr c = solve_expression(a, "x");
-    internal_assert(equal(c, b)) << "Expression: " << a << "\n solved to " << c << "\n instead of " << b << "\n";
+    internal_assert(equal(c, b))
+        << "Expression: " << a << "\n"
+        << " solved to " << c << "\n"
+        << " instead of " << b << "\n";
+}
+
+void check_interval(Expr a, Interval i, bool outer) {
+    Interval result =
+        outer ?
+        solve_for_outer_interval(a, "x") :
+        solve_for_inner_interval(a, "x");
+    result.min = simplify(result.min);
+    result.max = simplify(result.max);
+    internal_assert(equal(result.min, i.min) && equal(result.max, i.max))
+        << "Expression " << a << " solved to the interval:\n"
+        << "  min: " << result.min << "\n"
+        << "  max: " << result.max << "\n"
+        << " instead of:\n"
+        << "  min: " << i.min << "\n"
+        << "  max: " << i.max << "\n";
+
+}
+
+void check_outer_interval(Expr a, Expr min, Expr max) {
+    check_interval(a, Interval(min, max), true);
+}
+
+void check_inner_interval(Expr a, Expr min, Expr max) {
+    check_interval(a, Interval(min, max), false);
 }
 
 }
@@ -832,17 +862,17 @@ void solve_test() {
     Expr z = Variable::make(Int(32), "z");
 
     // Check some simple cases
-    check(3 - 4*x, x*(-4) + 3);
-    check(min(5, x), min(x, 5));
-    check(max(5, (5+x)*y), max(x*y + 5*y, 5));
-    check(5*y + 3*x == 2, ((x == ((2 - (5*y))/3)) && (((2 - (5*y)) % 3) == 0)));
+    check_solve(3 - 4*x, x*(-4) + 3);
+    check_solve(min(5, x), min(x, 5));
+    check_solve(max(5, (5+x)*y), max(x*y + 5*y, 5));
+    check_solve(5*y + 3*x == 2, ((x == ((2 - (5*y))/3)) && (((2 - (5*y)) % 3) == 0)));
 
     // A let statement
-    check(Let::make("z", 3 + 5*x, y + z < 8),
+    check_solve(Let::make("z", 3 + 5*x, y + z < 8),
           x < (((8 - (3 + y)) + 4)/5));
 
     // A let statement where the variable gets used twice.
-    check(Let::make("z", 3 + 5*x, y + (z + z) < 8),
+    check_solve(Let::make("z", 3 + 5*x, y + (z + z) < 8),
           x < (((8 - (6 + y)) + 9)/10));
 
     // Something where we expect a let in the output.
@@ -896,7 +926,28 @@ void solve_test() {
 
     // Function calls and cast nodes don't get inverted, but the bit
     // containing x still gets moved leftwards.
-    check(4.0f > sqrt(x), sqrt(x) < 4.0f);
+    check_solve(4.0f > sqrt(x), sqrt(x) < 4.0f);
+
+    // Now test solving for an interval
+    check_inner_interval(x > 0, 1, pos_inf);
+    check_inner_interval(x < 100, neg_inf, 99);
+    check_outer_interval(x > 0 && x < 100, 1, 99);
+    check_inner_interval(x > 0 && x < 100, 1, 99);
+
+    Expr c = Variable::make(Bool(), "c");
+    check_outer_interval(Let::make("y", 0, x > y && x < 100), 1, 99);
+    check_outer_interval(Let::make("c", x > 0, c && x < 100), 1, 99);
+
+    check_outer_interval((x >= 10 && x <= 90) && sin(x) > 0.5f, 10, 90);
+    check_inner_interval((x >= 10 && x <= 90) && sin(x) > 0.6f, pos_inf, neg_inf);
+
+    check_inner_interval(3*x + 4 < 27, neg_inf, 7);
+    check_outer_interval(3*x + 4 < 27, neg_inf, 7);
+
+    check_inner_interval(min(x, y) > 17, 18, y);
+    check_outer_interval(min(x, y) > 17, 18, pos_inf);
+
+    debug(0) << "Solve test passed\n";
 
 }
 
