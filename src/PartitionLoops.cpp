@@ -992,6 +992,7 @@ class IsNoOp : public IRVisitor {
     }
 
     void visit(const For *op) {
+        Expr old_condition = condition;
         op->body.accept(this);
         Scope<Interval> varying;
         varying.push(op->name, Interval(op->min, op->min + op->extent - 1));
@@ -999,6 +1000,7 @@ class IsNoOp : public IRVisitor {
         debug(3) << "About to relax over " << op->name << " : " << condition << "\n";
         condition = and_condition_over_domain(condition, varying, &tight);
         debug(3) << "Relaxed: " << condition << "\n";
+        condition = old_condition && (condition);// || simplify(op->extent <= 0));
     }
 
     void visit(const Call *op) {
@@ -1044,8 +1046,139 @@ public:
     bool tight = true;
 };
 
+
+class SimplifyUsingBounds : public IRMutator {
+    struct ContainingLoop {
+        string var;
+        Interval i;
+    };
+    vector<ContainingLoop> containing_loops;
+
+    using IRMutator::visit;
+
+    // Can we prove a condition over the non-rectangular domain of the for loops we're in?
+    bool provably_true_over_domain(Expr test) {
+        bool tight = true;
+        for (size_t i = containing_loops.size(); i > 0; i--) {
+            // Because the domain is potentially non-rectangular, we
+            // need to take each variable one-by-one, simplifying in
+            // between to allow for cancellations of the bounds of
+            // inner loops with outer loop variables.
+            auto loop = containing_loops[i-1];
+            if (loop.i.min.same_as(loop.i.max) && expr_uses_var(test, loop.var)) {
+                test = Let::make(loop.var, loop.i.min, test);
+            } else {
+                Scope<Interval> s;
+                s.push(loop.var, loop.i);
+                test = simplify(and_condition_over_domain(test, s, &tight));
+            }
+        }
+        return is_one(test);
+    }
+
+    void visit(const Min *op) {
+        if (!op->type.is_int() || op->type.bits < 32) {
+            IRMutator::visit(op);
+        } else {
+            Expr a = mutate(op->a);
+            Expr b = mutate(op->b);
+            Expr test = a <= b;
+            if (provably_true_over_domain(a <= b)) {
+                expr = a;
+            } else if (provably_true_over_domain(b <= a)) {
+                expr = b;
+            } else {
+                expr = Min::make(a, b);
+            }
+        }
+    }
+
+    void visit(const Max *op) {
+        if (!op->type.is_int() || op->type.bits < 32) {
+            IRMutator::visit(op);
+        } else {
+            Expr a = mutate(op->a);
+            Expr b = mutate(op->b);
+            if (provably_true_over_domain(a >= b)) {
+                expr = a;
+            } else if (provably_true_over_domain(b >= a)) {
+                expr = b;
+            } else {
+                expr = Max::make(a, b);
+            }
+        }
+    }
+
+    template<typename Cmp>
+    void visit_cmp(const Cmp *op) {
+        IRMutator::visit(op);
+        if (provably_true_over_domain(expr)) {
+            expr = make_one(op->type);
+        } else if (provably_true_over_domain(!expr)) {
+            expr = make_zero(op->type);
+        }
+    }
+
+    void visit(const LE *op) {
+        visit_cmp(op);
+    }
+
+    void visit(const LT *op) {
+        visit_cmp(op);
+    }
+
+    void visit(const GE *op) {
+        visit_cmp(op);
+    }
+
+    void visit(const GT *op) {
+        visit_cmp(op);
+    }
+
+    void visit(const EQ *op) {
+        visit_cmp(op);
+    }
+
+    void visit(const NE *op) {
+        visit_cmp(op);
+    }
+
+    template<typename StmtOrExpr, typename LetStmtOrLet>
+    StmtOrExpr visit_let(const LetStmtOrLet *op) {
+        Expr value = mutate(op->value);
+        containing_loops.push_back({op->name, {value, value}});
+        StmtOrExpr body = mutate(op->body);
+        containing_loops.pop_back();
+        return LetStmtOrLet::make(op->name, value, body);
+    }
+
+    void visit(const Let *op) {
+        expr = visit_let<Expr, Let>(op);
+    }
+
+    void visit(const LetStmt *op) {
+        stmt = visit_let<Stmt, LetStmt>(op);
+    }
+
+    void visit(const For *op) {
+        // Simplify the loop bounds.
+        Expr min = mutate(op->min);
+        Expr extent = mutate(op->extent);
+        containing_loops.push_back({op->name, {min, min + extent - 1}});
+        Stmt body = mutate(op->body);
+        containing_loops.pop_back();
+        stmt = For::make(op->name, min, extent, op->for_type, op->device_api, body);
+    }
+public:
+    SimplifyUsingBounds(const string &v, const Interval &i) {
+        containing_loops.push_back({v, i});
+    }
+};
+
 class TrimNoOps : public IRMutator {
     using IRMutator::visit;
+
+    Scope<Interval> loop_bounds;
 
     void visit(const For *op) {
         Stmt body = mutate(op->body);
@@ -1072,15 +1205,16 @@ class TrimNoOps : public IRMutator {
         // something.
         Interval i = solve_for_outer_interval(!is_no_op.condition, op->name);
 
+        if (interval_is_everything(i)) {
+            stmt = For::make(op->name, op->min, op->extent, op->for_type, op->device_api, body);
+            return;
+        }
+
         debug(3) << "Interval is: " << i.min << ", " << i.max << "\n";
 
         // Simplify the body to take advantage of the fact that the
         // loop range is now truncated
-        {
-            Scope<Interval> scope;
-            scope.push(op->name, i);
-            body = simplify(body, true, scope);
-        }
+        body = simplify(SimplifyUsingBounds(op->name, i).mutate(body));
 
         string new_min_name = unique_name(op->name + ".new_min", false);
         string new_max_name = unique_name(op->name + ".new_max", false);
@@ -1115,6 +1249,7 @@ class TrimNoOps : public IRMutator {
         stmt = LetStmt::make(new_max_name, new_max, stmt);
         stmt = LetStmt::make(new_min_name, new_min, stmt);
         stmt = LetStmt::make(old_max_name, old_max, stmt);
+
     }
 };
 
