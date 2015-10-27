@@ -778,12 +778,16 @@ public:
 
 Expr solve_expression(Expr e, const std::string &variable, const Scope<Expr> &scope) {
     SolveExpression solver(variable, scope);
-    e = solver.mutate(e);
+    Expr new_e = solver.mutate(e);
     if (solver.failed) {
         return Expr();
     } else {
         // The process has expanded lets. Re-collect them.
-        return common_subexpression_elimination(e);
+        new_e = common_subexpression_elimination(new_e);
+        debug(3) << "Solved expr:\n"
+                 << "  " << e << "\n"
+                 << "  " << new_e << "\n";
+        return new_e;
     }
 }
 
