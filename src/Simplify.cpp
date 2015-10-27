@@ -652,12 +652,66 @@ private:
         } else if (add_a && equal(add_a->b, b)) {
             // Ternary expressions where a term cancels
             expr = add_a->a;
-        } else if (add_a && equal(add_a->a, b)) {
+        } else if (add_a &&
+                   equal(add_a->a, b)) {
             expr = add_a->b;
-        } else if (add_b && equal(add_b->b, a)) {
+        } else if (add_b &&
+                   equal(add_b->b, a)) {
             expr = mutate(make_zero(add_b->a.type()) - add_b->a);
-        } else if (add_b && equal(add_b->a, a)) {
+        } else if (add_b &&
+                   equal(add_b->a, a)) {
             expr = mutate(make_zero(add_b->a.type()) - add_b->b);
+
+        } else if (max_a &&
+                   equal(max_a->a, b) &&
+                   !is_const(b) &&
+                   no_overflow(op->type)) {
+            // max(a, b) - a -> max(0, b-a)
+            expr = mutate(Max::make(make_zero(op->type), max_a->b - max_a->a));
+        } else if (min_a &&
+                   equal(min_a->a, b) &&
+                   !is_const(b) &&
+                   no_overflow(op->type)) {
+            // min(a, b) - a -> min(0, b-a)
+            expr = mutate(Min::make(make_zero(op->type), min_a->b - min_a->a));
+        } else if (max_a &&
+                   equal(max_a->b, b) &&
+                   !is_const(b) &&
+                   no_overflow(op->type)) {
+            // max(a, b) - b -> max(a-b, 0)
+            expr = mutate(Max::make(max_a->a - max_a->b, make_zero(op->type)));
+        } else if (min_a &&
+                   equal(min_a->b, b) &&
+                   !is_const(b) &&
+                   no_overflow(op->type)) {
+            // min(a, b) - b -> min(a-b, 0)
+            expr = mutate(Min::make(min_a->a - min_a->b, make_zero(op->type)));
+
+        } else if (max_b &&
+                   equal(max_b->a, a) &&
+                   !is_const(a) &&
+                   no_overflow(op->type)) {
+            // a - max(a, b) -> 0 - max(0, b-a) -> min(0, a-b)
+            expr = mutate(Min::make(make_zero(op->type), max_b->a - max_b->b));
+        } else if (min_b &&
+                   equal(min_b->a, a) &&
+                   !is_const(a) &&
+                   no_overflow(op->type)) {
+            // a - min(a, b) -> 0 - min(0, b-a) -> max(0, a-b)
+            expr = mutate(Max::make(make_zero(op->type), min_b->a - min_b->b));
+        } else if (max_b &&
+                   equal(max_b->b, a) &&
+                   !is_const(a) &&
+                   no_overflow(op->type)) {
+            // b - max(a, b) -> 0 - max(a-b, 0) -> min(b-a, 0)
+            expr = mutate(Min::make(max_b->b - max_b->a, make_zero(op->type)));
+        } else if (min_b &&
+                   equal(min_b->b, a) &&
+                   !is_const(a) &&
+                   no_overflow(op->type)) {
+            // b - min(a, b) -> 0 - min(a-b, 0) -> max(b-a, 0)
+            expr = mutate(Max::make(min_b->b - min_b->a, make_zero(op->type)));
+
         } else if (add_a &&
                    is_simple_const(add_a->b)) {
             // In ternary expressions, pull constants outside
@@ -2963,6 +3017,8 @@ private:
                 alignment_info.push(new_name, mod_rem);
                 new_value_tracked = true;
             }
+            //Interval bounds = bounds_of_expr_in_scope(new_value, bounds_info);
+            //bounds_info.push(new_name, bounds);
         }
         bool value_tracked = false;
         if (no_overflow_scalar_int(value.type())) {
@@ -2971,15 +3027,19 @@ private:
                 alignment_info.push(op->name, mod_rem);
                 value_tracked = true;
             }
+            //Interval bounds = bounds_of_expr_in_scope(value, bounds_info);
+            //bounds_info.push(op->name, bounds);
         }
 
         body = mutate(body);
 
         if (value_tracked) {
             alignment_info.pop(op->name);
+            //bounds_info.pop(op->name);
         }
         if (new_value_tracked) {
             alignment_info.pop(new_name);
+            //bounds_info.pop(new_name);
         }
 
         info = var_info.get(op->name);
@@ -3845,6 +3905,15 @@ void simplify_test() {
     check(min(8 - x, 2), 8 - max(x, 6));
     check(max(3, 77 - x), 77 - min(x, 74));
     check(min(max(8-x, 0), 8), 8 - max(min(x, 8), 0));
+
+    check(x - min(x, 2), max(x + -2, 0));
+    check(x - max(x, 2), min(x + -2, 0));
+    check(min(x, 2) - x, 2 - max(x, 2));
+    check(max(x, 2) - x, 2 - min(x, 2));
+    check(x - min(2, x), max(x + -2, 0));
+    check(x - max(2, x), min(x + -2, 0));
+    check(min(2, x) - x, 2 - max(x, 2));
+    check(max(2, x) - x, 2 - min(x, 2));
 
     // Simplifications of selects
     check(select(x == 3, 5, 7) + 7, select(x == 3, 12, 14));
