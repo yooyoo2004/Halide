@@ -606,12 +606,25 @@ class PartitionLoops : public IRMutator {
             }
         }
 
-        // Find simplifications we can apply to the prologue and
-        // epilogue.
+        // In general we can't simplify the prologue - it may run up
+        // to after the epilogue starts for small images. However if
+        // we can prove the epilogue starts after the prologue ends,
+        // we're OK.
+        bool can_simplify_prologue = true;
+        for (Expr min_val : min_vals) {
+            for (Expr max_val : max_vals) {
+                if (!is_one(simplify(min_val <= max_val))) {
+                    can_simplify_prologue = false;
+                }
+            }
+        }
+
+        // Find simplifications we can apply to the prologue and epilogue.
         for (auto const &s : middle_simps) {
             // If it goes down to minus infinity, we can also
             // apply it to the prologue
-            if (!interval_has_lower_bound(s.interval)) {
+            if (can_simplify_prologue &&
+                !interval_has_lower_bound(s.interval)) {
                 prologue_simps.push_back(s);
             }
 
@@ -624,7 +637,9 @@ class PartitionLoops : public IRMutator {
             // If our simplifications only contain one lower bound, and
             // it's tight, then the reverse rule can be applied to the
             // prologue.
-            if (interval_has_lower_bound(s.interval) && lower_bound_is_tight) {
+            if (can_simplify_prologue &&
+                interval_has_lower_bound(s.interval) &&
+                lower_bound_is_tight) {
                 internal_assert(s.tight);
                 Simplification s2 = s;
                 // This condition is never used (we already solved
@@ -634,7 +649,8 @@ class PartitionLoops : public IRMutator {
                 std::swap(s2.likely_value, s2.unlikely_value);
                 prologue_simps.push_back(s2);
             }
-            if (interval_has_upper_bound(s.interval) && upper_bound_is_tight) {
+            if (interval_has_upper_bound(s.interval) &&
+                upper_bound_is_tight) {
                 internal_assert(s.tight);
                 Simplification s2 = s;
                 s2.condition = !s2.condition;
