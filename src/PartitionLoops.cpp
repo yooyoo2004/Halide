@@ -1000,7 +1000,7 @@ class IsNoOp : public IRVisitor {
         debug(3) << "About to relax over " << op->name << " : " << condition << "\n";
         condition = and_condition_over_domain(condition, varying, &tight);
         debug(3) << "Relaxed: " << condition << "\n";
-        condition = old_condition && (condition);// || simplify(op->extent <= 0));
+        condition = old_condition && (condition || simplify(op->extent <= 0));
     }
 
     void visit(const Call *op) {
