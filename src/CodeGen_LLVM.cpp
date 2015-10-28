@@ -1265,7 +1265,7 @@ void CodeGen_LLVM::visit(const Mod *op) {
     // and |b|.
 
     if (op->type.is_float()) {
-        value = codegen(simplify(op->a - abs(op->b) * floor(op->a/abs(op->b))));
+        value = codegen(simplify(op->a - op->b * floor(op->a/op->b)));
     } else if (op->type.is_uint()) {
         int bits;
         if (is_const_power_of_two_integer(op->b, &bits)) {
