@@ -13,6 +13,7 @@ using std::string;
 using std::map;
 using std::pair;
 using std::make_pair;
+using std::vector;
 
 namespace {
 
@@ -774,6 +775,287 @@ public:
 
 };
 
+
+// Take a vector expression and convert it into an expression giving
+// the value of the i'th lane, where i is a new variable of the
+// requested name.
+class ConvertVectorLaneToFreeVar : public IRMutator {
+    Expr lane_var;
+
+    using IRMutator::visit;
+
+    void visit(const Ramp *op) {
+        expr = op->base + cast(op->base.type(), lane_var) * op->stride;
+    }
+
+    void visit(const Broadcast *op) {
+        expr = op->value;
+    }
+
+    void visit(const Call *op) {
+        if (op->type.is_vector()) {
+            internal_assert(op->name != Call::shuffle_vector &&
+                            op->name != Call::interleave_vectors);
+            vector<Expr> args;
+            for (Expr a : op->args) {
+                args.push_back(mutate(a));
+            }
+            expr = Call::make(op->type.element_of(), op->name, args, op->call_type);
+        } else {
+            IRMutator::visit(op);
+        }
+    }
+
+    void visit(const Load *op) {
+        if (op->type.is_vector()) {
+            expr = Load::make(op->type.element_of(), op->name, mutate(op->index), op->image, op->param);
+        } else {
+            IRMutator::visit(op);
+        }
+    }
+
+    void visit(const Cast *op) {
+        if (op->type.is_vector()) {
+            expr = Cast::make(op->type.element_of(), mutate(op->value));
+        } else {
+            IRMutator::visit(op);
+        }
+    }
+
+    Scope<Expr> inner_lets;
+
+    void visit(const Let *op) {
+        Expr value = mutate(op->value);
+        inner_lets.push(op->name, value);
+        Expr body = mutate(op->body);
+        inner_lets.pop(op->name);
+
+        if (value.same_as(op->value) && body.same_as(op->body)) {
+            expr = op;
+        } else {
+            expr = Let::make(op->name, value, body);
+        }
+    }
+
+    void visit(const Variable *op) {
+        if (op->type.is_vector() && inner_lets.contains(op->name)) {
+            expr = Variable::make(op->type.element_of(), op->name);
+        } else if (op->type.is_vector()) {
+            // Uh oh
+            internal_error << "TODO";
+        } else {
+            expr = op;
+        }
+    }
+
+public:
+    ConvertVectorLaneToFreeVar(const string &v) {
+        lane_var = Variable::make(Int(32), v);
+    }
+
+};
+
+class AndConditionOverDomain : public IRMutator {
+    using IRMutator::visit;
+
+    Scope<Interval> scope;
+    Scope<Expr> bound_vars;
+    bool flipped = false;
+
+    Interval get_bounds(Expr a) {
+        Interval bounds;
+        if (a.type().is_vector()) {
+            string v = unique_name('v');
+            scope.push(v, Interval(0, a.type().width-1));
+            a = ConvertVectorLaneToFreeVar(v).mutate(a);
+            bounds = bounds_of_expr_in_scope(a, scope);
+            scope.pop(v);
+        } else {
+            bounds = bounds_of_expr_in_scope(a, scope);
+        }
+        if (!bounds.min.same_as(bounds.max) ||
+            !bounds.min.defined() ||
+            !bounds.max.defined()) {
+            relaxed = true;
+        }
+        return bounds;
+    }
+
+    Expr make_bigger(Expr a) {
+        return get_bounds(a).max;
+    }
+
+    Expr make_smaller(Expr a) {
+        return get_bounds(a).min;
+    }
+
+    void visit(const Broadcast *op) {
+        expr = mutate(op->value);
+    }
+
+    template<typename Cmp, bool is_lt_or_le>
+    void visit_cmp(const Cmp *op) {
+        Expr a, b;
+        if (is_lt_or_le ^ flipped) {
+            a = make_bigger(op->a);
+            b = make_smaller(op->b);
+        } else {
+            a = make_smaller(op->a);
+            b = make_bigger(op->b);
+        }
+        if (!a.defined() || !b.defined()) {
+            if (flipped) {
+                expr = make_one(op->type.element_of());
+            } else {
+                expr = make_zero(op->type.element_of());
+            }
+        } else if (a.same_as(op->a) && b.same_as(op->b)) {
+            expr = op;
+        } else {
+            expr = Cmp::make(a, b);
+        }
+    }
+
+    void visit(const LT *op) {
+        visit_cmp<LT, true>(op);
+    }
+
+    void visit(const LE *op) {
+        visit_cmp<LE, true>(op);
+    }
+
+    void visit(const GT *op) {
+        visit_cmp<GT, false>(op);
+    }
+
+    void visit(const GE *op) {
+        visit_cmp<GE, false>(op);
+    }
+
+    void visit(const EQ *op) {
+        if (op->type.is_vector()) {
+            if (flipped) {
+                expr = make_one(op->type.element_of());
+            } else {
+                expr = make_zero(op->type.element_of());
+            }
+        } else {
+            IRMutator::visit(op);
+        }
+    }
+
+    void visit(const NE *op) {
+        expr = mutate(!(op->a == op->b));
+    }
+
+    void visit(const Not *op) {
+        flipped = !flipped;
+        IRMutator::visit(op);
+        flipped = !flipped;
+    }
+
+    void visit(const Variable *op) {
+        if (scope.contains(op->name) && op->type.is_bool()) {
+            Interval i = scope.get(op->name);
+            if (!flipped) {
+                if (i.min.defined()) {
+                    // Be conservative
+                    expr = i.min;
+                } else {
+                    expr = const_false();
+                }
+            } else {
+                if (i.max.defined()) {
+                    expr = i.max;
+                } else {
+                    expr = const_true();
+                }
+            }
+        } else {
+            expr = op;
+        }
+
+    }
+
+    void visit(const Let *op) {
+        // If it's a numeric value, we can just get the bounds of
+        // it. If it's a boolean value yet, we don't know whether it
+        // would be more conservative to make it true or to make it
+        // false, because we don't know how it will be used. We'd
+        // better take the union over both options.
+        Expr value = mutate(op->value);
+        Expr body;
+        Expr max_value = make_bigger(value);
+        Expr min_value = make_smaller(value);
+
+        if (op->value.type().is_bool()) {
+            flipped = !flipped;
+            Expr flipped_value = mutate(op->value);
+            if (!equal(value, flipped_value)) {
+                min_value = const_false();
+                max_value = const_true();
+            }
+            flipped = !flipped;
+        }
+
+        if (!max_value.same_as(value) || !min_value.same_as(value)) {
+            string min_name = unique_name(op->name + ".min", false);
+            string max_name = unique_name(op->name + ".max", false);
+            Expr min_var, max_var;
+            if (!min_value.defined() ||
+                (is_const(min_value) && min_value.as<Variable>())) {
+                min_var = min_value;
+                min_value = Expr();
+            } else {
+                min_var = Variable::make(min_value.type(), min_name);
+            }
+            if (!max_value.defined() ||
+                (is_const(max_value) && max_value.as<Variable>())) {
+                max_var = max_value;
+                max_value = Expr();
+            } else {
+                max_var = Variable::make(max_value.type(), max_name);
+            }
+
+            scope.push(op->name, Interval(min_var, max_var));
+            expr = mutate(op->body);
+            scope.pop(op->name);
+
+            if (expr_uses_var(expr, op->name)) {
+                if (op->value.type().is_bool()) {
+                    internal_error << "Should have removed inner boolean variable\n";
+                } else {
+                    expr = Let::make(op->name, value, expr);
+                }
+            }
+            if (min_value.defined() && expr_uses_var(expr, min_name)) {
+                expr = Let::make(min_name, min_value, expr);
+            }
+            if (max_value.defined() && expr_uses_var(expr, max_name)) {
+                expr = Let::make(max_name, max_value, expr);
+            }
+        } else {
+            bound_vars.push(op->name, value);
+            body = mutate(op->body);
+            bound_vars.pop(op->name);
+            if (value.same_as(op->value) && body.same_as(op->body)) {
+                expr = op;
+            } else {
+                expr = Let::make(op->name, value, body);
+            }
+        }
+    }
+
+public:
+    bool relaxed = false;
+
+    AndConditionOverDomain(const Scope<Interval> &parent_scope) {
+        scope.set_containing_scope(&parent_scope);
+    }
+};
+
+
+
 } // Anonymous namespace
 
 Expr solve_expression(Expr e, const std::string &variable, const Scope<Expr> &scope) {
@@ -820,6 +1102,20 @@ bool interval_is_everything(const Interval &i) {
     return i.min.same_as(neg_inf) && i.max.same_as(pos_inf);
 }
 
+Expr and_condition_over_domain(Expr e,
+                               const Scope<Interval> &varying,
+                               bool *tight) {
+    AndConditionOverDomain r(varying);
+    Expr out = r.mutate(e);
+    if (r.relaxed) {
+        debug(3) << "  Condition made more conservative using bounds. No longer tight:\n"
+                 << "    " << e << "\n"
+                 << "    " << out << "\n";
+        *tight = false;
+        out = simplify(out);
+    }
+    return out;
+}
 
 // Testing code
 
@@ -950,6 +1246,11 @@ void solve_test() {
 
     check_inner_interval(min(x, y) > 17, 18, y);
     check_outer_interval(min(x, y) > 17, 18, pos_inf);
+
+    // Test converting a vector lane to a free variable
+
+    // Test anding a condition over a domain
+
 
     debug(0) << "Solve test passed\n";
 

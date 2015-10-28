@@ -312,6 +312,7 @@ SOURCE_FILES = \
   Substitute.cpp \
   Target.cpp \
   Tracing.cpp \
+  TrimNoOps.cpp \
   Tuple.cpp \
   Type.cpp \
   UnifyDuplicateLets.cpp \
