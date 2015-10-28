@@ -412,6 +412,8 @@ private:
                     } else if (is_negative_const(mul_a->b)) {
                         expr = mutate(Opp::make(mul_a->a, (b / mul_a->b)));
                     }
+                } else if (is_const(mul_a->b, -1)) {
+                    expr = mutate(Opp::make(mul_a->a, make_zero(b.type()) - b));
                 } else {
                     // Don't use operator/ and operator % to sneak
                     // past the division-by-zero check. We'll only
