@@ -113,6 +113,7 @@ private:
     }
 
     void bounds_of_type(Type t) {
+        t = t.element_of();
         if (t.is_uint() && t.bits <= 16) {
             max = cast(t, (1 << t.bits) - 1);
             min = cast(t, 0);
@@ -655,7 +656,7 @@ private:
         op->index.accept(this);
         if (min.defined() && min.same_as(max)) {
             // If the index is const we can return the load of that index
-            min = max = Load::make(op->type, op->name, min, op->image, op->param);
+            min = max = Load::make(op->type.element_of(), op->name, min, op->image, op->param);
         } else {
             // Otherwise use the bounds of the type
             bounds_of_type(op->type);
@@ -663,11 +664,17 @@ private:
     }
 
     void visit(const Ramp *op) {
-        internal_error << "Bounds of vector";
+        // Treat the ramp lane as a free variable
+        string var_name = unique_name('t');
+        Expr var = Variable::make(op->base.type(), var_name);
+        Expr lane = op->base + var * op->stride;
+        scope.push(var_name, Interval(0, op->width-1));
+        lane.accept(this);
+        scope.pop(var_name);
     }
 
-    void visit(const Broadcast *) {
-        internal_error << "Bounds of vector";
+    void visit(const Broadcast *op) {
+        op->value.accept(this);
     }
 
     void visit(const Call *op) {
@@ -687,27 +694,29 @@ private:
             }
         }
 
-        if (op->type == Handle()) {
+        Type t = op->type.element_of();
+
+        if (t == Handle()) {
             min = max = Expr();
             return;
         }
 
         if (const_args && (op->call_type == Call::Image || op->call_type == Call::Extern)) {
-            min = max = Call::make(op->type, op->name, new_args, op->call_type,
+            min = max = Call::make(t, op->name, new_args, op->call_type,
                                    op->func, op->value_index, op->image, op->param);
         } else if (op->call_type == Call::Intrinsic && op->name == Call::abs) {
             Expr min_a = min, max_a = max;
-            min = make_zero(op->type);
+            min = make_zero(t);
             if (min_a.defined() && max_a.defined()) {
                 if (equal(min_a, max_a)) {
-                    min = max = Call::make(op->type, Call::abs, {max_a}, Call::Intrinsic);
+                    min = max = Call::make(t, Call::abs, {max_a}, Call::Intrinsic);
                 } else {
-                    min = make_zero(op->type);
+                    min = make_zero(t);
                     if (op->args[0].type().is_int() && op->args[0].type().bits == 32) {
-                        max = Max::make(Cast::make(op->type, -min_a), Cast::make(op->type, max_a));
+                        max = Max::make(Cast::make(t, -min_a), Cast::make(t, max_a));
                     } else {
-                        min_a = Call::make(op->type, Call::abs, {min_a}, Call::Intrinsic);
-                        max_a = Call::make(op->type, Call::abs, {max_a}, Call::Intrinsic);
+                        min_a = Call::make(t, Call::abs, {min_a}, Call::Intrinsic);
+                        max_a = Call::make(t, Call::abs, {max_a}, Call::Intrinsic);
                         max = Max::make(min_a, max_a);
                     }
                 }
@@ -733,7 +742,7 @@ private:
                 simplified.accept(this);
             } else {
                 // Just use the bounds of the type
-                bounds_of_type(op->type);
+                bounds_of_type(t);
             }
         } else if (op->args.size() == 1 && min.defined() && max.defined() &&
                    (op->name == "ceil_f32" || op->name == "ceil_f64" ||
@@ -744,9 +753,9 @@ private:
             // For monotonic, pure, single-argument functions, we can
             // make two calls for the min and the max.
             Expr min_a = min, max_a = max;
-            min = Call::make(op->type, op->name, {min_a}, op->call_type,
+            min = Call::make(t, op->name, {min_a}, op->call_type,
                              op->func, op->value_index, op->image, op->param);
-            max = Call::make(op->type, op->name, {max_a}, op->call_type,
+            max = Call::make(t, op->name, {max_a}, op->call_type,
                              op->func, op->value_index, op->image, op->param);
 
         } else if (op->call_type == Call::Intrinsic &&
@@ -775,7 +784,7 @@ private:
             bounds_of_func(op->func, op->value_index);
         } else {
             // Just use the bounds of the type
-            bounds_of_type(op->type);
+            bounds_of_type(t);
         }
     }
 
@@ -1487,6 +1496,10 @@ void bounds_test() {
     check(scope, cast<float>(x), 0.0f, 10.0f);
 
     check(scope, cast<int32_t>(abs(cast<float>(x))), 0, 10);
+
+    // Check some vectors
+    check(scope, Ramp::make(x*2, 5, 5), 0, 40);
+    check(scope, Broadcast::make(x*2, 5), 0, 20);
 
     // Check some operations that may overflow
     check(scope, (cast<uint8_t>(x)+250), make_const(UInt(8), 0), make_const(UInt(8), 255));
