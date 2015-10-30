@@ -951,11 +951,7 @@ class AndConditionOverDomain : public IRMutator {
             scope.pop(op->name);
 
             if (expr_uses_var(expr, op->name)) {
-                if (op->value.type().is_bool()) {
-                    internal_error << "Should have removed inner boolean variable\n";
-                } else {
-                    expr = Let::make(op->name, op->value, expr);
-                }
+                expr = Let::make(op->name, op->value, expr);
             }
             if (value_bounds.min.defined() && expr_uses_var(expr, min_name)) {
                 expr = Let::make(min_name, value_bounds.min, expr);
