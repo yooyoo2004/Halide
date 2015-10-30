@@ -414,6 +414,9 @@ private:
                     }
                 } else if (is_const(mul_a->b, -1)) {
                     expr = mutate(Opp::make(mul_a->a, make_zero(b.type()) - b));
+                } else if (is_negative_const(mul_a->b)) {
+                    Expr neg = simplify(make_zero(mul_a->b.type()) - mul_a->b);
+                    expr = mutate(Opp::make(mul_a->a * neg, make_zero(b.type()) - b));
                 } else {
                     // Don't use operator/ and operator % to sneak
                     // past the division-by-zero check. We'll only
@@ -430,7 +433,7 @@ private:
                     } else if (is_le) {
                         if (is_positive_const(mul_a->b)) {
                             expr = mutate(mul_a->a <= div);
-                        } else if (is_negative_const(mul_a->b)) {
+                        } else if (false && is_negative_const(mul_a->b)) {
                             expr = mutate(mul_a->a >= div);
                         } else {
                             fail(Cmp::make(a, b));
@@ -438,7 +441,7 @@ private:
                     } else if (is_lt) {
                         if (is_positive_const(mul_a->b)) {
                             expr = mutate(mul_a->a < (b + (mul_a->b - 1)) / mul_a->b);
-                        } else if (is_negative_const(mul_a->b)) {
+                        } else if (false && is_negative_const(mul_a->b)) {
                             expr = mutate(mul_a->a > (b - (mul_a->b + 1)) / mul_a->b);
                         } else {
                             fail(Cmp::make(a, b));
@@ -446,7 +449,7 @@ private:
                     } else if (is_gt) {
                         if (is_positive_const(mul_a->b)) {
                             expr = mutate(mul_a->a > div);
-                        } else if (is_negative_const(mul_a->b)) {
+                        } else if (false && is_negative_const(mul_a->b)) {
                             expr = mutate(mul_a->a < div);
                         } else {
                             fail(Cmp::make(a, b));
@@ -454,7 +457,7 @@ private:
                     } else if (is_ge) {
                         if (is_positive_const(mul_a->b)) {
                             expr = mutate(mul_a->a >= (b + (mul_a->b - 1)) / mul_a->b);
-                        } else if (is_negative_const(mul_a->b)) {
+                        } else if (false && is_negative_const(mul_a->b)) {
                             expr = mutate(mul_a->a <= (b - (mul_a->b + 1)) / mul_a->b);
                         } else {
                             fail(Cmp::make(a, b));
@@ -620,8 +623,14 @@ class SolveForInterval : public IRVisitor {
         op->b.accept(this);
         Interval ib = result;
         if (target) {
+            debug(3) << "And intersecting: " << Expr(op) << "\n"
+                     << "  " << ia.min << " " << ia.max << "\n"
+                     << "  " << ib.min << " " << ib.max << "\n";
             result = interval_intersection(ia, ib);
         } else {
+            debug(3) << "And union:" << Expr(op) << "\n"
+                     << "  " << ia.min << " " << ia.max << "\n"
+                     << "  " << ib.min << " " << ib.max << "\n";
             result = interval_union(ia, ib);
         }
     }
@@ -632,8 +641,14 @@ class SolveForInterval : public IRVisitor {
         op->b.accept(this);
         Interval ib = result;
         if (!target) {
+            debug(3) << "Or intersecting:" << Expr(op) << "\n"
+                     << "  " << ia.min << " " << ia.max << "\n"
+                     << "  " << ib.min << " " << ib.max << "\n";
             result = interval_intersection(ia, ib);
         } else {
+            debug(3) << "Or union:" << Expr(op) << "\n"
+                     << "  " << ia.min << " " << ia.max << "\n"
+                     << "  " << ib.min << " " << ib.max << "\n";
             result = interval_union(ia, ib);
         }
     }
@@ -709,14 +724,14 @@ class SolveForInterval : public IRVisitor {
             // Rewrite (max(a, b) <= c) <==> (a <= c && (b <= c || a >= b))
             // Also allow re-solving the new equations.
             Expr a = max_a->a, b = max_a->b, c = le->b;
-            Expr cond = (a <= c) && (b <= c || a >= b);
+            Expr cond = simplify((a <= c) && (b <= c || a >= b));
             already_solved = false;
             cond.accept(this);
             already_solved = true;
         } else if (const Min *min_a = le->a.as<Min>()) {
             // Rewrite (min(a, b) <= c) <==> (a <= c || (b <= c && a >= b))
             Expr a = min_a->a, b = min_a->b, c = le->b;
-            Expr cond = (a <= c) || (b <= c && a >= b);
+            Expr cond = simplify((a <= c) || (b <= c && a >= b));
             already_solved = false;
             cond.accept(this);
             already_solved = true;
@@ -746,14 +761,14 @@ class SolveForInterval : public IRVisitor {
             // Rewrite (max(a, b) >= c) <==> (a >= c || (b >= c && a <= b))
             // Also allow re-solving the new equations.
             Expr a = max_a->a, b = max_a->b, c = ge->b;
-            Expr cond = (a >= c) || (b >= c && a <= b);
+            Expr cond = simplify((a >= c) || (b >= c && a <= b));
             already_solved = false;
             cond.accept(this);
             already_solved = true;
         } else if (const Min *min_a = ge->a.as<Min>()) {
             // Rewrite (min(a, b) >= c) <==> (a >= c && (b >= c || a <= b))
             Expr a = min_a->a, b = min_a->b, c = ge->b;
-            Expr cond = (a >= c) && (b >= c || a <= b);
+            Expr cond = simplify((a >= c) && (b >= c || a <= b));
             already_solved = false;
             cond.accept(this);
             already_solved = true;
@@ -777,86 +792,6 @@ public:
 
 };
 
-
-// Take a vector expression and convert it into an expression giving
-// the value of the i'th lane, where i is a new variable of the
-// requested name.
-class ConvertVectorLaneToFreeVar : public IRMutator {
-    Expr lane_var;
-
-    using IRMutator::visit;
-
-    void visit(const Ramp *op) {
-        expr = op->base + cast(op->base.type(), lane_var) * op->stride;
-    }
-
-    void visit(const Broadcast *op) {
-        expr = op->value;
-    }
-
-    void visit(const Call *op) {
-        if (op->type.is_vector()) {
-            internal_assert(op->name != Call::shuffle_vector &&
-                            op->name != Call::interleave_vectors);
-            vector<Expr> args;
-            for (Expr a : op->args) {
-                args.push_back(mutate(a));
-            }
-            expr = Call::make(op->type.element_of(), op->name, args, op->call_type);
-        } else {
-            IRMutator::visit(op);
-        }
-    }
-
-    void visit(const Load *op) {
-        if (op->type.is_vector()) {
-            expr = Load::make(op->type.element_of(), op->name, mutate(op->index), op->image, op->param);
-        } else {
-            IRMutator::visit(op);
-        }
-    }
-
-    void visit(const Cast *op) {
-        if (op->type.is_vector()) {
-            expr = Cast::make(op->type.element_of(), mutate(op->value));
-        } else {
-            IRMutator::visit(op);
-        }
-    }
-
-    Scope<Expr> inner_lets;
-
-    void visit(const Let *op) {
-        Expr value = mutate(op->value);
-        inner_lets.push(op->name, value);
-        Expr body = mutate(op->body);
-        inner_lets.pop(op->name);
-
-        if (value.same_as(op->value) && body.same_as(op->body)) {
-            expr = op;
-        } else {
-            expr = Let::make(op->name, value, body);
-        }
-    }
-
-    void visit(const Variable *op) {
-        if (op->type.is_vector() && inner_lets.contains(op->name)) {
-            expr = Variable::make(op->type.element_of(), op->name);
-        } else if (op->type.is_vector()) {
-            // Uh oh
-            internal_error << "TODO";
-        } else {
-            expr = op;
-        }
-    }
-
-public:
-    ConvertVectorLaneToFreeVar(const string &v) {
-        lane_var = Variable::make(Int(32), v);
-    }
-
-};
-
 class AndConditionOverDomain : public IRMutator {
     using IRMutator::visit;
 
@@ -865,16 +800,7 @@ class AndConditionOverDomain : public IRMutator {
     bool flipped = false;
 
     Interval get_bounds(Expr a) {
-        Interval bounds;
-        if (a.type().is_vector()) {
-            string v = unique_name('v');
-            scope.push(v, Interval(0, a.type().width-1));
-            a = ConvertVectorLaneToFreeVar(v).mutate(a);
-            bounds = bounds_of_expr_in_scope(a, scope);
-            scope.pop(v);
-        } else {
-            bounds = bounds_of_expr_in_scope(a, scope);
-        }
+        Interval bounds = bounds_of_expr_in_scope(a, scope);
         if (!bounds.min.same_as(bounds.max) ||
             !bounds.min.defined() ||
             !bounds.max.defined()) {
@@ -985,38 +911,39 @@ class AndConditionOverDomain : public IRMutator {
         // would be more conservative to make it true or to make it
         // false, because we don't know how it will be used. We'd
         // better take the union over both options.
-        Expr value = mutate(op->value);
         Expr body;
-        Expr max_value = make_bigger(value);
-        Expr min_value = make_smaller(value);
-
+        Interval value_bounds;
         if (op->value.type().is_bool()) {
+            Expr value = mutate(op->value);
             flipped = !flipped;
             Expr flipped_value = mutate(op->value);
-            if (!equal(value, flipped_value)) {
-                min_value = const_false();
-                max_value = const_true();
-            }
             flipped = !flipped;
+            if (!equal(value, flipped_value)) {
+                value_bounds = Interval(const_false(), const_true());
+            } else {
+                value_bounds = get_bounds(value);
+            }
+        } else {
+            value_bounds = get_bounds(op->value);
         }
 
-        if (!max_value.same_as(value) || !min_value.same_as(value)) {
+        if (!value_bounds.max.same_as(op->value) || !value_bounds.min.same_as(op->value)) {
             string min_name = unique_name(op->name + ".min", false);
             string max_name = unique_name(op->name + ".max", false);
             Expr min_var, max_var;
-            if (!min_value.defined() ||
-                (is_const(min_value) && min_value.as<Variable>())) {
-                min_var = min_value;
-                min_value = Expr();
+            if (!value_bounds.min.defined() ||
+                (is_const(value_bounds.min) && value_bounds.min.as<Variable>())) {
+                min_var = value_bounds.min;
+                value_bounds.min = Expr();
             } else {
-                min_var = Variable::make(min_value.type(), min_name);
+                min_var = Variable::make(value_bounds.min.type(), min_name);
             }
-            if (!max_value.defined() ||
-                (is_const(max_value) && max_value.as<Variable>())) {
-                max_var = max_value;
-                max_value = Expr();
+            if (!value_bounds.max.defined() ||
+                (is_const(value_bounds.max) && value_bounds.max.as<Variable>())) {
+                max_var = value_bounds.max;
+                value_bounds.max = Expr();
             } else {
-                max_var = Variable::make(max_value.type(), max_name);
+                max_var = Variable::make(value_bounds.max.type(), max_name);
             }
 
             scope.push(op->name, Interval(min_var, max_var));
@@ -1027,23 +954,23 @@ class AndConditionOverDomain : public IRMutator {
                 if (op->value.type().is_bool()) {
                     internal_error << "Should have removed inner boolean variable\n";
                 } else {
-                    expr = Let::make(op->name, value, expr);
+                    expr = Let::make(op->name, op->value, expr);
                 }
             }
-            if (min_value.defined() && expr_uses_var(expr, min_name)) {
-                expr = Let::make(min_name, min_value, expr);
+            if (value_bounds.min.defined() && expr_uses_var(expr, min_name)) {
+                expr = Let::make(min_name, value_bounds.min, expr);
             }
-            if (max_value.defined() && expr_uses_var(expr, max_name)) {
-                expr = Let::make(max_name, max_value, expr);
+            if (value_bounds.max.defined() && expr_uses_var(expr, max_name)) {
+                expr = Let::make(max_name, value_bounds.max, expr);
             }
         } else {
-            bound_vars.push(op->name, value);
+            bound_vars.push(op->name, op->value);
             body = mutate(op->body);
             bound_vars.pop(op->name);
-            if (value.same_as(op->value) && body.same_as(op->body)) {
+            if (body.same_as(op->body)) {
                 expr = op;
             } else {
-                expr = Let::make(op->name, value, body);
+                expr = Let::make(op->name, op->value, body);
             }
         }
     }
