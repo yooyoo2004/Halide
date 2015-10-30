@@ -46,6 +46,18 @@ class StripIdentities : public IRMutator {
 class IsNoOp : public IRVisitor {
     using IRVisitor::visit;
 
+    Expr make_and(Expr a, Expr b) {
+        if (is_zero(a) || is_one(b)) return a;
+        if (is_zero(b) || is_one(a)) return b;
+        return a && b;
+    }
+
+    Expr make_or(Expr a, Expr b) {
+        if (is_zero(a) || is_one(b)) return b;
+        if (is_zero(b) || is_one(a)) return a;
+        return a || b;
+    }
+
     void visit(const Store *op) {
         if (op->value.type().is_handle()) {
             condition = const_false();
@@ -58,7 +70,7 @@ class IsNoOp : public IRVisitor {
             is_no_op = StripIdentities().mutate(is_no_op);
             debug(3) << "Anding condition over domain... " << is_no_op << "\n";
             is_no_op = and_condition_over_domain(is_no_op, Scope<Interval>::empty_scope(), &tight);
-            condition = condition && is_no_op;
+            condition = make_and(condition, is_no_op);
             debug(3) << "Condition is now " << condition << "\n";
         }
     }
@@ -73,21 +85,20 @@ class IsNoOp : public IRVisitor {
         debug(3) << "About to relax over " << op->name << " : " << condition << "\n";
         condition = and_condition_over_domain(condition, varying, &tight);
         debug(3) << "Relaxed: " << condition << "\n";
-        condition = old_condition && (condition || simplify(op->extent <= 0));
+        condition = make_and(old_condition, make_or(condition, simplify(op->extent <= 0)));
     }
 
     void visit(const IfThenElse *op) {
-        // TODO: test this case
         Expr total_condition = condition;
         condition = const_true();
         op->then_case.accept(this);
         // This is a no-op if we're previously a no-op, and the
         // condition is false or the if body is a no-op.
-        total_condition = total_condition && (!op->condition || condition);
+        total_condition = make_and(total_condition, make_or(!op->condition, condition));
         condition = const_true();
         if (op->else_case.defined()) {
             op->else_case.accept(this);
-            total_condition = total_condition && (op->condition || condition);
+            total_condition = make_and(total_condition, make_or(op->condition, condition));
         }
         condition = total_condition;
     }
@@ -257,6 +268,8 @@ public:
     SimplifyUsingBounds(const string &v, const Interval &i) {
         containing_loops.push_back({v, i});
     }
+
+    SimplifyUsingBounds() {}
 };
 
 class TrimNoOps : public IRMutator {
@@ -291,12 +304,13 @@ class TrimNoOps : public IRMutator {
         // something.
         Interval i = solve_for_outer_interval(!is_no_op.condition, op->name);
 
+        debug(3) << "Interval is: " << i.min << ", " << i.max << "\n";
+
         if (interval_is_everything(i)) {
+            // Nope.
             stmt = For::make(op->name, op->min, op->extent, op->for_type, op->device_api, body);
             return;
         }
-
-        debug(3) << "Interval is: " << i.min << ", " << i.max << "\n";
 
         // Simplify the body to take advantage of the fact that the
         // loop range is now truncated
