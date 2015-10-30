@@ -142,11 +142,13 @@ class SimplifyUsingBounds : public IRMutator {
     bool provably_true_over_domain(Expr test) {
         bool tight = true;
         for (size_t i = containing_loops.size(); i > 0; i--) {
+            if (is_const(test)) break;
             // Because the domain is potentially non-rectangular, we
             // need to take each variable one-by-one, simplifying in
             // between to allow for cancellations of the bounds of
             // inner loops with outer loop variables.
             auto loop = containing_loops[i-1];
+            if (!expr_uses_var(test, loop.var)) continue;
             if (loop.i.min.same_as(loop.i.max) && expr_uses_var(test, loop.var)) {
                 test = Let::make(loop.var, loop.i.min, test);
             } else {
