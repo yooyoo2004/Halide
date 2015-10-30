@@ -414,11 +414,15 @@ class PartitionLoops : public IRMutator {
         } else {
             Expr loop_var = Variable::make(Int(32), op->name);
             stmt = simpler_body;
-            if (make_epilogue) {
-                stmt = IfThenElse::make(loop_var < max_steady, stmt, epilogue);
-            }
-            if (make_prologue) {
-                stmt = IfThenElse::make(loop_var < min_steady, prologue, stmt);
+            if (make_epilogue && make_prologue && equal(prologue, epilogue)) {
+                stmt = IfThenElse::make(min_steady < loop_var && loop_var < max_steady, stmt, prologue);
+            } else {
+                if (make_epilogue) {
+                    stmt = IfThenElse::make(loop_var < max_steady, stmt, epilogue);
+                }
+                if (make_prologue) {
+                    stmt = IfThenElse::make(loop_var < min_steady, prologue, stmt);
+                }
             }
             stmt = For::make(op->name, op->min, op->extent, op->for_type, op->device_api, stmt);
         }
