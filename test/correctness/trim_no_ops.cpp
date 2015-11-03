@@ -2,15 +2,28 @@
 
 using namespace Halide;
 
-class CountSelects : public Internal::IRVisitor {
+class CountConditionals : public Internal::IRVisitor {
 public:
     int count = 0;
+    bool in_produce = false;
 private:
     using Internal::IRVisitor::visit;
 
     void visit(const Internal::Select *op) {
-        count++;
+        if (in_produce) count++;
         Internal::IRVisitor::visit(op);
+    }
+
+    void visit(const Internal::IfThenElse *op) {
+        if (in_produce) count++;
+        Internal::IRVisitor::visit(op);
+    }
+
+    void visit(const Internal::ProducerConsumer *op) {
+        bool old_in_produce = in_produce;
+        in_produce = true;
+        Internal::IRVisitor::visit(op);
+        in_produce = old_in_produce;
     }
 };
 
@@ -28,7 +41,7 @@ int main(int argc, char **argv) {
         Module m = f.compile_to_module({});
 
         // There should be no selects after trim_no_ops runs
-        CountSelects s;
+        CountConditionals s;
         m.functions[0].body.accept(&s);
         if (s.count != 0) {
             std::cerr << "There were selects in the lowered code: " << m.functions[0].body << "\n";
@@ -67,7 +80,7 @@ int main(int argc, char **argv) {
                 select(xi >= 0 && xi <= 73 && yi >= 0 && yi <= 73, likely(1), 0);
 
             Module m = hist.compile_to_module({});
-            CountSelects s;
+            CountConditionals s;
             m.functions[0].body.accept(&s);
             if (s.count != 0) {
                 std::cerr << "There were selects in the lowered code: " << m.functions[0].body << "\n";
@@ -91,6 +104,26 @@ int main(int argc, char **argv) {
                        i, hist_result(i), true_hist_result(i));
                 return -1;
             }
+        }
+    }
+
+    // Test tiled iteration over a triangle, where the condition is an
+    // if statement instead of a select.
+    {
+        Func f;
+        Var x, y;
+        f(x, y) = select(2*x < y, 5, undef<int>());
+
+        Var xi, yi;
+        f.tile(x, y, xi, yi, 4, 4);
+
+        // Check there are no if statements.
+        Module m = f.compile_to_module({});
+        CountConditionals s;
+        m.functions[0].body.accept(&s);
+        if (s.count != 0) {
+            std::cerr << "There were selects or ifs in the lowered code: " << m.functions[0].body << "\n";
+            return -1;
         }
     }
 
