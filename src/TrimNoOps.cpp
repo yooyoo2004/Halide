@@ -139,7 +139,6 @@ public:
     bool tight = true;
 };
 
-
 class SimplifyUsingBounds : public IRMutator {
     struct ContainingLoop {
         string var;
@@ -151,22 +150,33 @@ class SimplifyUsingBounds : public IRMutator {
 
     // Can we prove a condition over the non-rectangular domain of the for loops we're in?
     bool provably_true_over_domain(Expr test) {
+        debug(3) << "Attempting to prove: " << test << "\n";
         bool tight = true;
         for (size_t i = containing_loops.size(); i > 0; i--) {
-            if (is_const(test)) break;
             // Because the domain is potentially non-rectangular, we
             // need to take each variable one-by-one, simplifying in
             // between to allow for cancellations of the bounds of
             // inner loops with outer loop variables.
             auto loop = containing_loops[i-1];
-            if (!expr_uses_var(test, loop.var)) continue;
-            if (loop.i.min.same_as(loop.i.max) && expr_uses_var(test, loop.var)) {
-                test = Let::make(loop.var, loop.i.min, test);
+            if (is_const(test)) {
+                break;
+            } else if (!expr_uses_var(test, loop.var)) {
+                continue;
+            } else if (loop.i.min.same_as(loop.i.max) && expr_uses_var(test, loop.var)) {
+                test = common_subexpression_elimination(Let::make(loop.var, loop.i.min, test));
             } else {
                 Scope<Interval> s;
+                // Rearrange the expression if possible so that the
+                // loop var only occurs once.
+                Expr solved = solve_expression(test, loop.var);
+                if (solved.defined()) {
+                    test = solved;
+                }
                 s.push(loop.var, loop.i);
-                test = simplify(and_condition_over_domain(test, s, &tight));
+                test = and_condition_over_domain(test, s, &tight);
             }
+            test = simplify(test);
+            debug(3) << " -> " << test << "\n";
         }
         return is_one(test);
     }
@@ -282,6 +292,8 @@ class TrimNoOps : public IRMutator {
 
         Stmt body = mutate(op->body);
 
+        debug(3) << "\n\n ***** Trim no ops in loop over " << op->name << "\n";
+
         IsNoOp is_no_op;
         body.accept(&is_no_op);
         debug(3) << "Condition is " << is_no_op.condition << "\n";
@@ -343,13 +355,17 @@ class TrimNoOps : public IRMutator {
             new_max = old_max;
         }
 
-        Expr new_extent = new_max - new_min;
+        Expr new_extent = new_max_var - new_min_var;
 
         stmt = For::make(op->name, new_min_var, new_extent, op->for_type, op->device_api, body);
         stmt = LetStmt::make(new_max_name, new_max, stmt);
         stmt = LetStmt::make(new_min_name, new_min, stmt);
         stmt = LetStmt::make(old_max_name, old_max, stmt);
+        stmt = simplify(stmt);
 
+        debug(3) << "Rewrote loop.\n"
+                 << "Old: " << Stmt(op) << "\n"
+                 << "New: " << stmt << "\n";
     }
 };
 
