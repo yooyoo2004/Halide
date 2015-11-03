@@ -2144,8 +2144,13 @@ private:
                 expr = mutate(make_const(a.type(), ia - ib) < add_b->a);
             } else if (sub_b &&
                        equal(sub_b->a, a)) {
-                // Add a term to both sides
+                // Subtract a term from both sides
                 expr = mutate(sub_b->b < make_zero(sub_b->b.type()));
+            } else if (sub_b &&
+                       is_const(a) &&
+                       is_const(sub_b->a)) {
+                // (c1 < c2 - x) -> (x < c2 - c1)
+                expr = mutate(sub_b->b < (sub_b->a - a));
             } else if (mul_a &&
                        mul_b &&
                        is_positive_const(mul_a->b) &&
@@ -2153,49 +2158,56 @@ private:
                        equal(mul_a->b, mul_b->b)) {
                 // Divide both sides by a constant
                 expr = mutate(mul_a->a < mul_b->a);
+            } else if (mul_a &&
+                       is_positive_const(mul_a->b) &&
+                       is_const(b)) {
+                // (a * c1 < c2) <=> (a < (c2 - 1) / c1 + 1)
+                expr = mutate(mul_a->a < (((b - 1) / mul_a->b) + 1));
+            } else if (mul_b &&
+                       is_positive_const(mul_b->b) &&
+                       is_const(a)) {
+                // (c1 < b * c2) <=> ((c1 / c2) < b)
+                expr = mutate((a / mul_b->b) < mul_b->a);
             } else if (min_a) {
+                // (min(a, b) < c) <=> (a < c || b < c)
+                // See if that would simplify usefully:
                 Expr lt_a = mutate(min_a->a < b);
                 Expr lt_b = mutate(min_a->b < b);
-                if (is_one(lt_a) || is_one(lt_b)) {
-                    expr = const_true();
-                } else if (is_zero(lt_a) && is_zero(lt_b)) {
-                    expr = const_false();
+                if (is_const(lt_a) || is_const(lt_b)) {
+                    expr = mutate(lt_a || lt_b);
                 } else if (a.same_as(op->a) && b.same_as(op->b)) {
                     expr = op;
                 } else {
                     expr = LT::make(a, b);
                 }
             } else if (max_a) {
+                // (max(a, b) < c) <=> (a < c && b < c)
                 Expr lt_a = mutate(max_a->a < b);
                 Expr lt_b = mutate(max_a->b < b);
-                if (is_one(lt_a) && is_one(lt_b)) {
-                    expr = const_true();
-                } else if (is_zero(lt_a) || is_zero(lt_b)) {
-                    expr = const_false();
+                if (is_const(lt_a) || is_const(lt_b)) {
+                    expr = mutate(lt_a && lt_b);
                 } else if (a.same_as(op->a) && b.same_as(op->b)) {
                     expr = op;
                 } else {
                     expr = LT::make(a, b);
                 }
             } else if (min_b) {
+                // (a < min(b, c)) <=> (a < b && a < c)
                 Expr lt_a = mutate(a < min_b->a);
                 Expr lt_b = mutate(a < min_b->b);
-                if (is_one(lt_a) && is_one(lt_b)) {
-                    expr = const_true();
-                } else if (is_zero(lt_a) || is_zero(lt_b)) {
-                    expr = const_false();
+                if (is_const(lt_a) || is_const(lt_b)) {
+                    expr = mutate(lt_a && lt_b);
                 } else if (a.same_as(op->a) && b.same_as(op->b)) {
                     expr = op;
                 } else {
                     expr = LT::make(a, b);
                 }
             } else if (max_b) {
+                // (a < max(b, c)) <=> (a < b || a < c)
                 Expr lt_a = mutate(a < max_b->a);
                 Expr lt_b = mutate(a < max_b->b);
-                if (is_one(lt_a) || is_one(lt_b)) {
-                    expr = const_true();
-                } else if (is_zero(lt_a) && is_zero(lt_b)) {
-                    expr = const_false();
+                if (is_const(lt_a) || is_const(lt_b)) {
+                    expr = mutate(lt_a || lt_b);
                 } else if (a.same_as(op->a) && b.same_as(op->b)) {
                     expr = op;
                 } else {
@@ -3728,6 +3740,23 @@ void simplify_test() {
     check(x <  min(x, y), f);
     check(min(x, y) <= x, t);
     check(max(x, y) <  x, f);
+    check(max(x, y) <= y, x <= y);
+    check(min(x, y) >= y, y <= x);
+
+    check(x*5 < 4, x < 1);
+    check(x*5 < 5, x < 1);
+    check(x*5 < 6, x < 2);
+    check(x*5 <= 4, x <= 0);
+    check(x*5 <= 5, x <= 1);
+    check(x*5 <= 6, x <= 1);
+    check(x*5 > 4, 0 < x);
+    check(x*5 > 5, 1 < x);
+    check(x*5 > 6, 1 < x);
+    check(x*5 >= 4, 1 <= x);
+    check(x*5 >= 5, 1 <= x);
+    check(x*5 >= 6, 2 <= x);
+
+    check(4 - x <= 0, 4 <= x);
 
     check((x/8)*8 < x - 8, f);
     check((x/8)*8 < x - 9, f);
