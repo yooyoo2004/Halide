@@ -433,32 +433,24 @@ private:
                     } else if (is_le) {
                         if (is_positive_const(mul_a->b)) {
                             expr = mutate(mul_a->a <= div);
-                        } else if (false && is_negative_const(mul_a->b)) {
-                            expr = mutate(mul_a->a >= div);
                         } else {
                             fail(Cmp::make(a, b));
                         }
                     } else if (is_lt) {
                         if (is_positive_const(mul_a->b)) {
-                            expr = mutate(mul_a->a < (b + (mul_a->b - 1)) / mul_a->b);
-                        } else if (false && is_negative_const(mul_a->b)) {
-                            expr = mutate(mul_a->a > (b - (mul_a->b + 1)) / mul_a->b);
+                            expr = mutate(mul_a->a <= (b - 1) / mul_a->b);
                         } else {
                             fail(Cmp::make(a, b));
                         }
                     } else if (is_gt) {
                         if (is_positive_const(mul_a->b)) {
                             expr = mutate(mul_a->a > div);
-                        } else if (false && is_negative_const(mul_a->b)) {
-                            expr = mutate(mul_a->a < div);
                         } else {
                             fail(Cmp::make(a, b));
                         }
                     } else if (is_ge) {
                         if (is_positive_const(mul_a->b)) {
-                            expr = mutate(mul_a->a >= (b + (mul_a->b - 1)) / mul_a->b);
-                        } else if (false && is_negative_const(mul_a->b)) {
-                            expr = mutate(mul_a->a <= (b - (mul_a->b + 1)) / mul_a->b);
+                            expr = mutate(mul_a->a > (b - 1) / mul_a->b);
                         } else {
                             fail(Cmp::make(a, b));
                         }
@@ -703,6 +695,20 @@ class SolveForInterval : public IRVisitor {
         cond.accept(this);
     }
 
+    // Is it legal to make the condition less frequently true -
+    // i.e. replace it with a sufficient condition (something that
+    // implies it).
+    bool can_tighten_condition() {
+        return !(outer ^ target);
+    }
+
+    // Is it legal to make the condition more frequently true -
+    // i.e. replace it with a necessary condition (something it
+    // implies)
+    bool can_relax_condition() {
+        return outer ^ target;
+    }
+
     void visit(const LE *le) {
         const Variable *v = le->a.as<Variable>();
         if (!already_solved) {
@@ -735,6 +741,30 @@ class SolveForInterval : public IRVisitor {
             already_solved = false;
             cond.accept(this);
             already_solved = true;
+        } else if (const Div *div_a = le->a.as<Div>()) {
+            if (is_positive_const(div_a->b)) {
+                Expr a = div_a->a, b = div_a->b, c = le->b;
+                // (a / b <= c)
+                // <==>  (a/b)*b <= c*b
+                // <==>  a - a%b <= c*b
+                if (can_tighten_condition()) {
+                    // <==   a <= c*b
+                    already_solved = false;
+                    Expr cond = simplify(a <= c*b);
+                    cond.accept(this);
+                    already_solved = true;
+                } else if (can_relax_condition()) {
+                    //  ==>  a - (b-1) <= c*b
+                    // <==>  a <= c*b + b-1
+                    // <==>  a <= (c+1)*b - 1
+                    already_solved = false;
+                    Expr cond = simplify(a <= (c + 1)*b - 1);
+                    cond.accept(this);
+                    already_solved = true;
+                } else {
+                    internal_error << "Should be able to either relax or tighten expr\n";
+                }
+            }
         } else {
             fail();
         }
@@ -886,14 +916,14 @@ class AndConditionOverDomain : public IRMutator {
         if (scope.contains(op->name) && op->type.is_bool()) {
             Interval i = scope.get(op->name);
             if (!flipped) {
-                if (i.min.defined()) {
+                if (interval_has_lower_bound(i)) {
                     // Be conservative
                     expr = i.min;
                 } else {
                     expr = const_false();
                 }
             } else {
-                if (i.max.defined()) {
+                if (interval_has_upper_bound(i)) {
                     expr = i.max;
                 } else {
                     expr = const_true();
@@ -991,7 +1021,7 @@ Expr solve_expression(Expr e, const std::string &variable, const Scope<Expr> &sc
     } else {
         // The process has expanded lets. Re-collect them.
         new_e = common_subexpression_elimination(new_e);
-        debug(3) << "Solved expr:\n"
+        debug(3) << "Solved expr for " << variable << " :\n"
                  << "  " << e << "\n"
                  << "  " << new_e << "\n";
         return new_e;
@@ -1012,11 +1042,11 @@ Interval solve_for_outer_interval(Expr c, const std::string &var) {
 }
 
 bool interval_has_lower_bound(const Interval &i) {
-    return !i.min.same_as(neg_inf);
+    return i.min.defined() && !i.min.same_as(neg_inf);
 }
 
 bool interval_has_upper_bound(const Interval &i) {
-    return !i.max.same_as(pos_inf);
+    return i.max.defined() && !i.max.same_as(pos_inf);
 }
 
 bool interval_is_empty(const Interval &i) {
@@ -1094,11 +1124,11 @@ void solve_test() {
 
     // A let statement
     check_solve(Let::make("z", 3 + 5*x, y + z < 8),
-          x < (((8 - (3 + y)) + 4)/5));
+          x <= (((8 - (3 + y)) - 1)/5));
 
     // A let statement where the variable gets used twice.
     check_solve(Let::make("z", 3 + 5*x, y + (z + z) < 8),
-          x < (((8 - (6 + y)) + 9)/10));
+          x <= (((8 - (6 + y)) - 1)/10));
 
     // Something where we expect a let in the output.
     {
@@ -1172,12 +1202,10 @@ void solve_test() {
     check_inner_interval(min(x, y) > 17, 18, y);
     check_outer_interval(min(x, y) > 17, 18, pos_inf);
 
-    // Test converting a vector lane to a free variable
-
     // Test anding a condition over a domain
 
 
-    debug(0) << "Solve test passed\n";
+    debug(3) << "Solve test passed\n";
 
 }
 
