@@ -40,6 +40,9 @@ void unpack_closure(const Closure& closure, Scope<llvm::Value *> &dst,
 /** Get the llvm type equivalent to a given halide type */
 llvm::Type *llvm_type_of(llvm::LLVMContext *context, Halide::Type t);
 
+/** Get the Halide type equivalent to a given LLVM type */
+Halide::Type halide_type_of(llvm::Type *t, bool is_signed = true);
+
 /** A routine to check if a list of extents are all constants, and if so
  * verify the total size is less than 2^31 - 1. If the result is constant,
  * but overflows, this routine asserts. The name parameter is used in the

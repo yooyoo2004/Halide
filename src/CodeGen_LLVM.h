@@ -215,6 +215,9 @@ protected:
      * representation of the result of the expression. */
     llvm::Value *codegen(Expr);
 
+    /** Get a Halide Expr for an already compiled LLVM expression. */
+    Expr uncodegen(llvm::Value *value, bool is_signed = true);
+
     /** Emit code that runs a statement. */
     void codegen(Stmt);
 

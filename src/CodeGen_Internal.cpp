@@ -124,6 +124,28 @@ llvm::Type *llvm_type_of(LLVMContext *c, Halide::Type t) {
     }
 }
 
+Halide::Type halide_type_of(llvm::Type *t, bool is_signed) {
+    if (!t->isVectorTy()) {
+        if (t->isHalfTy()) {
+            return Halide::Float(16);
+        } else if (t->isFloatTy()) {
+            return Halide::Float(32);
+        } else if (t->isDoubleTy()) {
+            return Halide::Float(64);
+        } else if (t->isIntegerTy()) {
+            if (is_signed) {
+                return Halide::Int(t->getIntegerBitWidth());
+            } else {
+                return Halide::UInt(t->getIntegerBitWidth());
+            }
+        } else {
+            return Halide::Handle();
+        }
+    } else {
+        return halide_type_of(t->getScalarType(), is_signed).with_lanes(t->getVectorNumElements());
+    }
+}
+
 bool constant_allocation_size(const std::vector<Expr> &extents, const std::string &name, int32_t &size) {
     int64_t result = 1;
 

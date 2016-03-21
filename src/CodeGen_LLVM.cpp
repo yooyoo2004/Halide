@@ -1154,6 +1154,13 @@ Value *CodeGen_LLVM::codegen(Expr e) {
     return value;
 }
 
+Expr CodeGen_LLVM::uncodegen(llvm::Value *value, bool is_signed) {
+    Halide::Type type = halide_type_of(value->getType(), is_signed);
+    std::string name = unique_name("uncodegen");
+    sym_push(name, value);
+    return Variable::make(type, name);
+}
+
 void CodeGen_LLVM::codegen(Stmt s) {
     internal_assert(s.defined());
     debug(3) << "Codegen: " << s << "\n";
