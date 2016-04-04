@@ -1,4 +1,4 @@
-#include "runtime_internal.h"
+#include "HalideRuntime.h"
 
 #ifndef _STRUCT_TIMEVAL
 #define _STRUCT_TIMEVAL
@@ -42,6 +42,11 @@ WEAK int64_t halide_current_time_ns(void *user_context) {
     int64_t d = int64_t(now.tv_sec - halide_reference_clock.tv_sec)*1000000;
     int64_t ud = int64_t(now.tv_usec) - int64_t(halide_reference_clock.tv_usec);
     return (d + ud) * 1000;
+}
+
+extern int usleep(int);
+WEAK void halide_sleep_ms(void *user_context, int ms) {
+        usleep(ms * 1000);
 }
 
 }

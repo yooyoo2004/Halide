@@ -1,20 +1,13 @@
+include(CheckCXXCompilerFlag)
+
 add_executable(build_halide_h ../tools/build_halide_h.cpp)
 add_executable(bitcode2cpp ../tools/bitcode2cpp.cpp)
 
-
 if (MSVC)
-  # Suppress some warnings
-  add_definitions("-D_CRT_SECURE_NO_WARNINGS")
-  add_definitions("-D_SCL_SECURE_NO_WARNINGS")
-  add_definitions("/wd4244 /wd4267 /wd4800 /wd4996")
   # -g produces dwarf debugging info, which is not useful on windows
   #  (and fails to compile due to llvm bug 15393)
   set(RUNTIME_DEBUG_FLAG "")
 else()
-  add_definitions("-D__STDC_LIMIT_MACROS")
-  add_definitions("-D__STDC_CONSTANT_MACROS")
-  add_definitions("-std=c++11")
-  add_definitions("-fno-rtti")
   set(RUNTIME_DEBUG_FLAG "-g")
 endif()
 
@@ -25,53 +18,6 @@ else()
   set(HALIDE_LIBRARY_TYPE STATIC)
 endif()
 
-include_directories ( "${LLVM_INCLUDE}")
-link_directories ("${LLVM_LIB}")
-
-set(LLVM_CONFIG ${LLVM_BIN}/llvm-config)
-if(WIN32)
-  file(GLOB LIBS RELATIVE "${LLVM_LIB}" "${LLVM_LIB}/*.lib")
-else()
-  #file(GLOB LIBS RELATIVE "${LLVM_LIB}" "${LLVM_LIB}/libLLVM*.a")
-  execute_process(COMMAND "${LLVM_CONFIG}" --libfiles OUTPUT_VARIABLE LIBS_UNSTRIPPED)
-  string(STRIP "${LIBS_UNSTRIPPED}" LIBS_SPACES)
-  string(REPLACE " " ";" LIBS "${LIBS_SPACES}")
-endif()
-
-if (TARGET_NATIVE_CLIENT)
-  add_definitions("-DWITH_NATIVE_CLIENT")
-endif()
-
-if (TARGET_X86)
-  add_definitions("-DWITH_X86")
-endif()
-
-if (TARGET_ARM)
-  add_definitions("-DWITH_ARM")
-endif()
-
-if (TARGET_AARCH64)
-  add_definitions("-DWITH_AARCH64")
-endif()
-
-if (TARGET_PTX)
-  add_definitions("-DWITH_PTX")
-endif()
-
-if (TARGET_OPENCL)
-  add_definitions("-DWITH_OPENCL")
-endif()
-
-if (TARGET_OPENGL)
-  add_definitions("-DWITH_OPENGL")
-endif()
-
-if (TARGET_MIPS)
-  add_definitions("-DWITH_MIPS")
-endif()
-
-add_definitions("-DLLVM_VERSION=${LLVM_VERSION}")
-
 set(RUNTIME_CPP
   android_clock
   android_host_cpu_count
@@ -81,7 +27,9 @@ set(RUNTIME_CPP
   cuda
   destructors
   device_interface
+  errors
   fake_thread_pool
+  float16_t
   gcd_thread_pool
   gpu_device_selection
   ios_io
@@ -90,11 +38,16 @@ set(RUNTIME_CPP
   linux_opengl_context
   matlab
   metadata
+  mingw_math
   module_aot_ref_count
   module_jit_ref_count
   nacl_host_cpu_count
   opencl
+  metal
+  metal_objc_arm
+  metal_objc_x86
   opengl
+  openglcompute
   osx_clock
   osx_get_symbol
   osx_host_cpu_count
@@ -104,9 +57,12 @@ set(RUNTIME_CPP
   posix_error_handler
   posix_get_symbol
   posix_io
-  posix_math
   posix_print
   posix_thread_pool
+  profiler
+  profiler_inlined
+  renderscript
+  runtime_api
   ssp
   to_string
   tracing
@@ -127,6 +83,7 @@ set (RUNTIME_LL
   pnacl_math
   posix_math
   ptx_dev
+  renderscript_dev
   win32_math
   x86
   x86_avx
@@ -156,13 +113,13 @@ set(INITIAL_MODULES )
 foreach (i ${RUNTIME_CPP} )
   foreach (j ${ARCHS} )
     IF (LLVM_VERSION LESS 36)
-      IF (ARCHS EQUAL 32)
+      IF (${j} EQUAL 32)
         set(TARGET "i386-unknown-unknown-unknown")
       ELSE()
         set(TARGET "x86_64-unknown-unknown-unknown")
       ENDIF()
     ELSE()
-      IF (ARCHS EQUAL 32)
+      IF (${j} EQUAL 32)
         IF (${i} MATCHES "windows_.*")
           # win32 uses the stdcall calling convention, which is x86-specific
           set(TARGET "i386-unknown-unknown-unknown")
@@ -184,11 +141,16 @@ foreach (i ${RUNTIME_CPP} )
 
     add_custom_command(OUTPUT "${LL_D}"
                        DEPENDS "${SOURCE}"
-                       COMMAND ${CLANG} ${CXX_WARNING_FLAGS} -std=c++11 ${RUNTIME_DEBUG_FLAG} -DDEBUG_RUNTIME -fno-ms-compatibility -ffreestanding -fno-blocks -fno-exceptions -fno-unwind-tables -m${j} -target "${TARGET}" "-I${NATIVE_RUNTIME_DIR}" -DCOMPILING_HALIDE_RUNTIME "-DLLVM_VERSION=${LLVM_VERSION}" -DBITS_${j} -emit-llvm -S "${SOURCE}" -o "${LL_D}"
-                       COMMENT "${SOURCE} -> ${LL_D}")
+                       COMMAND ${CLANG} ${CXX_WARNING_FLAGS} -std=c++11 ${RUNTIME_DEBUG_FLAG} -DDEBUG_RUNTIME -O3 -fno-ms-compatibility -ffreestanding -fno-blocks -fno-exceptions -fno-unwind-tables -m${j} -target "${TARGET}" "-I${NATIVE_RUNTIME_DIR}" -DCOMPILING_HALIDE_RUNTIME "-DLLVM_VERSION=${LLVM_VERSION}" -DBITS_${j} -emit-llvm -S "${SOURCE}" -o "${LL_D}"
+                       COMMENT "${SOURCE} -> ${LL_D}"
+                       # Make sure that the output of this command also depends
+                       # on the header files that ${SOURCE} uses
+                       # FIXME: Only works for makefile generator
+                       IMPLICIT_DEPENDS CXX "${SOURCE}"
+                      )
     add_custom_command(OUTPUT "${LL}"
                        DEPENDS "${SOURCE}"
-                       COMMAND ${CLANG} ${CXX_WARNING_FLAGS} -std=c++11 -fno-ms-compatibility -ffreestanding -fno-blocks -fno-exceptions -fno-unwind-tables -m${j} -target "${TARGET}" "-I${NATIVE_RUNTIME_DIR}" -DCOMPILING_HALIDE_RUNTIME "-DLLVM_VERSION=${LLVM_VERSION}" -DBITS_${j} -emit-llvm -S "${SOURCE}" -o "${LL}"
+                       COMMAND ${CLANG} ${CXX_WARNING_FLAGS} -std=c++11 -O3 -fno-ms-compatibility -ffreestanding -fno-blocks -fno-exceptions -fno-unwind-tables -m${j} -target "${TARGET}" "-I${NATIVE_RUNTIME_DIR}" -DCOMPILING_HALIDE_RUNTIME "-DLLVM_VERSION=${LLVM_VERSION}" -DBITS_${j} -emit-llvm -S "${SOURCE}" -o "${LL}"
                        COMMENT "${SOURCE} -> ${LL}")
 
     add_custom_command(OUTPUT "${BC_D}"
@@ -235,13 +197,10 @@ foreach (i ${RUNTIME_BC} )
   list(APPEND INITIAL_MODULES "${INITMOD}")
 endforeach()
 
-add_library(InitialModules STATIC
-  ${INITIAL_MODULES})
-
-add_dependencies(InitialModules
-  bitcode2cpp)
 
 set(HEADER_FILES
+  AddImageChecks.h
+  AddParameterChecks.h
   AllocationBoundsInference.h
   Argument.h
   BlockFlattening.h
@@ -250,6 +209,7 @@ set(HEADER_FILES
   BoundsInference.h
   Buffer.h
   CSE.h
+  Closure.h
   CodeGen_ARM.h
   CodeGen_C.h
   CodeGen_GPU_Dev.h
@@ -257,27 +217,34 @@ set(HEADER_FILES
   CodeGen_LLVM.h
   CodeGen_MIPS.h
   CodeGen_OpenCL_Dev.h
+  CodeGen_Metal_Dev.h
   CodeGen_OpenGL_Dev.h
+  CodeGen_OpenGLCompute_Dev.h
   CodeGen_PNaCl.h
+  CodeGen_PowerPC.h
   CodeGen_PTX_Dev.h
   CodeGen_Posix.h
+  CodeGen_Renderscript_Dev.h
   CodeGen_X86.h
+  CPlusPlusMangle.h
   Debug.h
   DebugToFile.h
   Deinterleave.h
   Derivative.h
+  DeviceArgument.h
   DeviceInterface.h
   EarlyFree.h
+  EliminateBoolVectors.h
   Error.h
   Expr.h
   ExprUsesVar.h
   Extern.h
   FastIntegerDivide.h
   FindCalls.h
+  Float16.h
   Func.h
   Function.h
   Generator.h
-  HumanReadableStmt.h
   IR.h
   IREquality.h
   IRMatch.h
@@ -312,16 +279,20 @@ set(HEADER_FILES
   Param.h
   Parameter.h
   PartitionLoops.h
+  Pipeline.h
   Profiling.h
   Qualify.h
   RDom.h
   Random.h
+  RealizationOrder.h
   Reduction.h
   RemoveDeadAllocations.h
   RemoveTrivialForLoops.h
   RemoveUndef.h
   Schedule.h
+  ScheduleFunctions.h
   Scope.h
+  SelectGPUAPI.h
   Simplify.h
   SkipStages.h
   SlidingWindow.h
@@ -351,22 +322,39 @@ add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/include/Halide.h"
   WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}"
   DEPENDS build_halide_h ${HEADER_FILES})
 
-file(COPY runtime/HalideRuntime.h DESTINATION "${CMAKE_BINARY_DIR}/include")
-file(COPY runtime/HalideRuntimeCuda.h DESTINATION "${CMAKE_BINARY_DIR}/include")
-file(COPY runtime/HalideRuntimeOpenCL.h DESTINATION "${CMAKE_BINARY_DIR}/include")
-file(COPY runtime/HalideRuntimeOpenGL.h DESTINATION "${CMAKE_BINARY_DIR}/include")
+configure_file(runtime/HalideRuntime.h "${CMAKE_BINARY_DIR}/include" COPYONLY)
+configure_file(runtime/HalideRuntimeCuda.h "${CMAKE_BINARY_DIR}/include" COPYONLY)
+configure_file(runtime/HalideRuntimeOpenCL.h "${CMAKE_BINARY_DIR}/include" COPYONLY)
+configure_file(runtime/HalideRuntimeMetal.h "${CMAKE_BINARY_DIR}/include" COPYONLY)
+configure_file(runtime/HalideRuntimeOpenGL.h "${CMAKE_BINARY_DIR}/include" COPYONLY)
+configure_file(runtime/HalideRuntimeOpenGLCompute.h "${CMAKE_BINARY_DIR}/include" COPYONLY)
+configure_file(runtime/HalideRuntimeRenderscript.h "${CMAKE_BINARY_DIR}/include" COPYONLY)
 
-add_definitions("-DCOMPILING_HALIDE")
+
+IF ((LLVM_VERSION LESS 36) OR (TARGET_NATIVE_CLIENT))
+  set(BITWRITER_FILES
+    BitWriter_3_2.35/BitcodeWriter.cpp
+    BitWriter_3_2.35/BitcodeWriterPass.cpp
+    BitWriter_3_2.35/ValueEnumerator.cpp
+  )
+ELSE()
+  set(BITWRITER_FILES
+    BitWriter_3_2/BitcodeWriter.cpp
+    BitWriter_3_2/BitcodeWriterPass.cpp
+    BitWriter_3_2/ValueEnumerator.cpp
+  )
+ENDIF()
 
 add_library(Halide ${HALIDE_LIBRARY_TYPE}
-
+  AddImageChecks.cpp
+  AddParameterChecks.cpp
   AllocationBoundsInference.cpp
   BlockFlattening.cpp
   BoundaryConditions.cpp
   Bounds.cpp
   BoundsInference.cpp
   Buffer.cpp
-  CSE.cpp
+  Closure.cpp
   CodeGen_ARM.cpp
   CodeGen_C.cpp
   CodeGen_GPU_Dev.cpp
@@ -375,27 +363,34 @@ add_library(Halide ${HALIDE_LIBRARY_TYPE}
   CodeGen_LLVM.cpp
   CodeGen_MIPS.cpp
   CodeGen_OpenCL_Dev.cpp
+  CodeGen_Metal_Dev.cpp
   CodeGen_OpenGL_Dev.cpp
+  CodeGen_OpenGLCompute_Dev.cpp
   CodeGen_PNaCl.cpp
+  CodeGen_PowerPC.cpp
   CodeGen_PTX_Dev.cpp
   CodeGen_Posix.cpp
+  CodeGen_Renderscript_Dev.cpp
   CodeGen_X86.cpp
+  CPlusPlusMangle.cpp
+  CSE.cpp
   Debug.cpp
   Debug.cpp
   DebugToFile.cpp
   Deinterleave.cpp
   Derivative.cpp
+  DeviceArgument.cpp
   DeviceInterface.cpp
   EarlyFree.cpp
+  EliminateBoolVectors.cpp
   Error.cpp
-  ExprUsesVar.cpp
   FastIntegerDivide.cpp
   FindCalls.cpp
+  Float16.cpp
   Func.cpp
   Function.cpp
   FuseGPUThreadLoops.cpp
   Generator.cpp
-  HumanReadableStmt.cpp
   IR.cpp
   IREquality.cpp
   IRMatch.cpp
@@ -427,15 +422,20 @@ add_library(Halide ${HALIDE_LIBRARY_TYPE}
   Param.cpp
   Parameter.cpp
   PartitionLoops.cpp
+  Pipeline.cpp
+  PrintLoopNest.cpp
   Profiling.cpp
   Qualify.cpp
   RDom.cpp
   Random.cpp
+  RealizationOrder.cpp
   Reduction.cpp
   RemoveDeadAllocations.cpp
   RemoveTrivialForLoops.cpp
   RemoveUndef.cpp
   Schedule.cpp
+  ScheduleFunctions.cpp
+  SelectGPUAPI.cpp
   Simplify.cpp
   SkipStages.cpp
   SlidingWindow.cpp
@@ -455,73 +455,137 @@ add_library(Halide ${HALIDE_LIBRARY_TYPE}
   Var.cpp
   VaryingAttributes.cpp
   VectorizeLoops.cpp
+  ${BITWRITER_FILES}
   "${CMAKE_BINARY_DIR}/include/Halide.h"
   ${HEADER_FILES}
+  ${INITIAL_MODULES}
 )
 
-# CMake's Xcode generator will run otool on all of the ${LIBS} if we pass them
-# to target_link_libraries. This makes the CMake generation step take a very
-# long time. Instead, since we add the libs to the extra.LinkFileList passed to
-# Xcode below it is not necessary to pass them to target_link_libraries as well.
-if (XCODE)
-  target_link_libraries(Halide InitialModules)
+   if (WIN32)
+     if (MSVC)
+           # empty
+     else()
+       set_target_properties(Halide PROPERTIES LINK_FLAGS "-Wl,--export-all-symbols")
+     endif()
+   endif()
+
+# List of LLVM Components required
+# This list will be appended to depending on the targets we need to support
+# See the output of ``llvm-config --components`` for a list of possible components
+set(LLVM_COMPONENTS mcjit;bitwriter;linker)
+if (LLVM_VERSION GREATER 36)
+  list(APPEND LLVM_COMPONENTS passes)
 else()
-  target_link_libraries(Halide InitialModules ${LIBS})
+  list(APPEND LLVM_COMPONENTS ipo)
 endif()
 
-if (NOT WIN32)
+# Set definitions and compiler flags
+
+# Note when PUBLIC or INTERFACE scope is used in target_compile_* then targets
+# that link against the Halide library inherit those options and definitions
+target_include_directories(Halide PRIVATE ${LLVM_INCLUDE})
+target_include_directories(Halide INTERFACE "${CMAKE_BINARY_DIR}/include")
+
+if (TARGET_NATIVE_CLIENT)
+  target_compile_definitions(Halide PRIVATE "-DWITH_NATIVE_CLIENT")
+endif()
+
+# TODO: For targets we can link against even fewer libraries by specifying
+# only the components we **REALLY** need (e.g. x86asmprinter;x86codegen rather than x86)
+if (TARGET_X86)
+  target_compile_definitions(Halide PRIVATE "-DWITH_X86")
+  list(APPEND LLVM_COMPONENTS x86)
+endif()
+
+if (TARGET_ARM)
+  target_compile_definitions(Halide PRIVATE "-DWITH_ARM")
+  list(APPEND LLVM_COMPONENTS arm)
+endif()
+
+if (TARGET_AARCH64)
+  target_compile_definitions(Halide PRIVATE "-DWITH_AARCH64")
+  list(APPEND LLVM_COMPONENTS aarch64)
+endif()
+
+if (TARGET_PTX)
+  target_compile_definitions(Halide PRIVATE "-DWITH_PTX")
+  list(APPEND LLVM_COMPONENTS nvptx)
+endif()
+
+if (TARGET_OPENCL)
+  target_compile_definitions(Halide PRIVATE "-DWITH_OPENCL")
+endif()
+
+if (TARGET_OPENGL)
+  target_compile_definitions(Halide PRIVATE "-DWITH_OPENGL")
+endif()
+
+if (TARGET_MIPS)
+  target_compile_definitions(Halide PRIVATE "-DWITH_MIPS")
+  list(APPEND LLVM_COMPONENTS mips)
+endif()
+
+if (TARGET_METAL)
+  target_compile_definitions(Halide PRIVATE "-DWITH_METAL")
+endif()
+
+target_compile_definitions(Halide PRIVATE "-DLLVM_VERSION=${LLVM_VERSION}")
+target_compile_definitions(Halide PRIVATE "-DCOMPILING_HALIDE")
+
+if (MSVC)
+  # Suppress some warnings
+  target_compile_options(Halide PUBLIC /wd4244 /wd4267 /wd4800 /wd4996)
+  target_compile_definitions(Halide PUBLIC "-D_CRT_SECURE_NO_WARNINGS" "-D_SCL_SECURE_NO_WARNINGS")
+  # To compile LLVM headers following was taken from LLVM CMake files:
+  # Disable sized deallocation if the flag is supported. MSVC fails to compile
+  # the operator new overload in LLVM/IR/Function.h and Instruction.h otherwise.
+  # See LLVM PR: 23513 (https://llvm.org/bugs/show_bug.cgi?id=23513)
+  check_cxx_compiler_flag("/WX /Zc:sizedDealloc-" SUPPORTS_SIZED_DEALLOC)
+  if (SUPPORTS_SIZED_DEALLOC)
+    target_compile_options(Halide PRIVATE "/Zc:sizedDealloc-")
+  endif()
+else()
+  # I'm not sure if we want targets that link against Halide to inherit
+  # the LLVM definitions so make the scope PRIVATE for now.
+  # FIXME: These defines should come from ``llvm-config --cppflags``
+  target_compile_definitions(Halide PRIVATE "-D__STDC_LIMIT_MACROS" "-D__STDC_CONSTANT_MACROS" "-D__STDC_FORMAT_MACROS")
+  target_compile_options(Halide PUBLIC "-std=c++11") # Halide and its clients need to use C++11
+  if(NOT HALIDE_ENABLE_RTTI)
+    target_compile_options(Halide PUBLIC "-fno-rtti")
+  endif()
+endif()
+
+# Get the LLVM libraries we need
+set(LLVM_CONFIG ${LLVM_BIN}/llvm-config)
+if(MSVC)
+  file(GLOB LIBS "${LLVM_LIB}/LLVM*.lib")
+else()
+  execute_process(COMMAND "${LLVM_CONFIG}" --libfiles ${LLVM_COMPONENTS} OUTPUT_VARIABLE LIBS_UNSTRIPPED)
+  string(STRIP "${LIBS_UNSTRIPPED}" LIBS_SPACES)
+  string(REPLACE " " ";" LIBS "${LIBS_SPACES}")
+endif()
+
+# When building a shared library the LLVM libraries will be
+# embedded in the Halide library. When building a static library
+# LLVM is not embedded but CMake knows that when building an executable
+# against the Halide static library that it needs to link LLVM too so
+# PRIVATE scope is the correct choice here.
+target_link_libraries(Halide PRIVATE ${LIBS})
+
+if (NOT MSVC)
   if (${LLVM_VERSION} GREATER 34)
-    execute_process(COMMAND "${LLVM_CONFIG}" --system-libs OUTPUT_VARIABLE EXTRA_LIBS)
+    execute_process(COMMAND "${LLVM_CONFIG}" --system-libs ${LLVM_COMPONENTS} OUTPUT_VARIABLE EXTRA_LIBS)
   else()
-    execute_process(COMMAND "${LLVM_CONFIG}" --ldflags OUTPUT_VARIABLE EXTRA_LIBS)
+    execute_process(COMMAND "${LLVM_CONFIG}" --ldflags ${LLVM_COMPONENTS} OUTPUT_VARIABLE EXTRA_LIBS)
   endif()
   string(STRIP EXTRA_LIBS "${EXTRA_LIBS}")
   string(REPLACE "-l" ";" EXTRA_LIBS "${EXTRA_LIBS}")
   string(REPLACE "\n" "" EXTRA_LIBS "${EXTRA_LIBS}")
   string(REPLACE " " "" EXTRA_LIBS "${EXTRA_LIBS}")
-  target_link_libraries(Halide ${EXTRA_LIBS})
+  target_link_libraries(Halide PUBLIC ${EXTRA_LIBS})
 endif()
 
-if (NOT HALIDE_SHARED_LIBRARY)
-
-# For the Xcode build, we want the static library version of libHalide.a
-# to include all of its dependencies so that other projects can link to the
-# library without having to worry about which version of LLVM or the initial
-# modules it was built with. This is accomplished by adding an additional file
-# list to the link line containing all of these dependencies
-
-if (XCODE)
-
-# Create a link file list
-set(EXTRA_LINKFILELIST "${PROJECT_BINARY_DIR}/${PROJECT_NAME}.build/extra.LinkFileList")
-
-# Determine the location of libInitialModules.a so we can include the path to it
-# in the link file list
-IF (CMAKE_BUILD_TYPE)
-  set(InitialModulesPath ${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}/${CMAKE_BUILD_TYPE}/libInitialModules.a)
-ELSE()
-  set(InitialModulesPath ${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}/Debug/libInitialModules.a)
-ENDIF()
-
-# We need a newline delimited list of the lib files
-execute_process(COMMAND "${LLVM_CONFIG}" --libfiles OUTPUT_VARIABLE LIBS)
-string(REPLACE " " "\n" LIBS ${LIBS})
-
-# Write the archive file dependencies to a new LinkFileList
-file(WRITE ${EXTRA_LINKFILELIST} "${LIBS}${InitialModulesPath}\n")
-
-set_target_properties(Halide PROPERTIES XCODE_ATTRIBUTE_OTHER_LIBTOOLFLAGS "-filelist ${EXTRA_LINKFILELIST}")
-
-endif(XCODE)
-
-endif (NOT HALIDE_SHARED_LIBRARY)
-
-# if this is a DLL, don't link dependencies to this set of libs.
-#if (HALIDE_SHARED_LIBRARY)
-#  set_target_properties(Halide PROPERTIES LINK_INTERFACE_LIBRARIES "")
-#endif()
-
 add_dependencies(Halide
-  InitialModules
+  bitcode2cpp
   build_halide_h
 )

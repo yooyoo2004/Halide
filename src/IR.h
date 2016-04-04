@@ -24,8 +24,7 @@ namespace Internal {
 /** The actual IR nodes begin here. Remember that all the Expr
  * nodes also have a public "type" property */
 
-/** Cast a node from one type to another. Can't change vector
- * widths. */
+/** Cast a node from one type to another. Can't change vector widths. */
 struct Cast : public ExprNode<Cast> {
     Expr value;
 
@@ -173,26 +172,26 @@ struct Load : public ExprNode<Load> {
     EXPORT static Expr make(Type type, std::string name, Expr index, Buffer image, Parameter param);
 };
 
-/** A linear ramp vector node. This is vector with 'width' elements,
+/** A linear ramp vector node. This is vector with 'lanes' elements,
  * where element i is 'base' + i*'stride'. This is a convenient way to
  * pass around vectors without busting them up into individual
  * elements. E.g. a dense vector load from a buffer can use a ramp
  * node with stride 1 as the index. */
 struct Ramp : public ExprNode<Ramp> {
     Expr base, stride;
-    int width;
+    int lanes;
 
-    EXPORT static Expr make(Expr base, Expr stride, int width);
+    EXPORT static Expr make(Expr base, Expr stride, int lanes);
 };
 
-/** A vector with 'width' elements, in which every element is
+/** A vector with 'lanes' elements, in which every element is
  * 'value'. This is a special case of the ramp node above, in which
  * the stride is zero. */
 struct Broadcast : public ExprNode<Broadcast> {
     Expr value;
-    int width;
+    int lanes;
 
-    EXPORT static Expr make(Expr value, int width);
+    EXPORT static Expr make(Expr value, int lanes);
 };
 
 /** A let expression, like you might find in a functional
@@ -232,7 +231,7 @@ struct AssertStmt : public StmtNode<AssertStmt> {
  * often undefined. (check update.defined() to find out). None of this
  * is actually enforced, the node is purely for informative
  * purposes to help out our analysis during lowering. */
-struct Pipeline : public StmtNode<Pipeline> {
+struct ProducerConsumer : public StmtNode<ProducerConsumer> {
     std::string name;
     Stmt produce, update, consume;
 
@@ -271,17 +270,36 @@ struct Allocate : public StmtNode<Allocate> {
     Type type;
     std::vector<Expr> extents;
     Expr condition;
+
+    // These override the code generator dependent malloc and free
+    // equivalents if provided. If the new_expr succeeds, that is it
+    // returns non-nullptr, the function named be free_function is
+    // guaranteed to be called. The free function signature must match
+    // that of the code generator dependent free (typically
+    // halide_free). If free_function is left empty, code generator
+    // default will be called.
+    Expr new_expr;
+    std::string free_function;
     Stmt body;
 
     EXPORT static Stmt make(std::string name, Type type, const std::vector<Expr> &extents,
-                            Expr condition, Stmt body);
+                            Expr condition, Stmt body,
+                            Expr new_expr = Expr(), std::string free_function = std::string());
+
+    /** A routine to check if the extents are all constants, and if so verify
+     * the total size is less than 2^31 - 1. If the result is constant, but
+     * overflows, this routine asserts. This returns 0 if the extents are
+     * not all constants; otherwise, it returns the total constant allocation
+     * size. */
+    EXPORT static int32_t constant_allocation_size(const std::vector<Expr> &extents, const std::string &name);
+    EXPORT int32_t constant_allocation_size() const;
 };
 
 /** Free the resources associated with the given buffer. */
 struct Free : public StmtNode<Free> {
     std::string name;
 
-    static Stmt make(std::string name);
+    EXPORT static Stmt make(std::string name);
 };
 
 /** A single-dimensional span. Includes all numbers between min and
@@ -335,16 +353,23 @@ struct Evaluate : public StmtNode<Evaluate> {
     EXPORT static Stmt make(Expr v);
 };
 
-/** A function call. This can represent a call to some extern
- * function (like sin), but it's also our multi-dimensional
- * version of a Load, so it can be a load from an input image, or
- * a call to another halide function. The latter two types of call
- * nodes don't survive all the way down to code generation - the
- * lowering process converts them to Load nodes. */
+/** A function call. This can represent a call to some extern function
+ * (like sin), but it's also our multi-dimensional version of a Load,
+ * so it can be a load from an input image, or a call to another
+ * halide function. These two types of call nodes don't survive all
+ * the way down to code generation - the lowering process converts
+ * them to Load nodes. */
 struct Call : public ExprNode<Call> {
     std::string name;
     std::vector<Expr> args;
-    typedef enum {Image, Extern, Halide, Intrinsic} CallType;
+    typedef enum {Image,        //< A load from an input image
+                  Extern,       //< A call to an external C-ABI function, possibly with side-effects
+                  ExternCPlusPlus, //< A call to an external C-ABI function, possibly with side-effects
+                  PureExtern,   //< A call to a guaranteed-side-effect-free external function
+                  Halide,       //< A call to a Func
+                  Intrinsic,    //< A possibly-side-effecty compiler intrinsic, which has special handling during codegen
+                  PureIntrinsic //< A side-effect-free version of the above.
+    } CallType;
     CallType call_type;
 
     // Halide uses calls internally to represent certain operations
@@ -367,13 +392,13 @@ struct Call : public ExprNode<Call> {
         abs,
         absd,
         rewrite_buffer,
-        profiling_timer,
         random,
         lerp,
         create_buffer_t,
         copy_buffer_t,
         extract_buffer_min,
         extract_buffer_max,
+        extract_buffer_host,
         set_host_dirty,
         set_dev_dirty,
         popcount,
@@ -397,7 +422,8 @@ struct Call : public ExprNode<Call> {
         copy_memory,
         likely,
         make_int64,
-        make_float64;
+        make_float64,
+        register_destructor;
 
     // If it's a call to another halide function, this call node
     // holds onto a pointer to that function.
@@ -426,7 +452,7 @@ struct Call : public ExprNode<Call> {
             << "Value index out of range in call to halide function\n";
         internal_assert(func.has_pure_definition() || func.has_extern_definition())
             << "Call to undefined halide function\n";
-        return make(func.output_types()[idx], func.name(), args, Halide, func, idx, Buffer(), Parameter());
+        return make(func.output_types()[(size_t)idx], func.name(), args, Halide, func, idx, Buffer(), Parameter());
     }
 
     /** Convenience constructor for loads from concrete images */
@@ -439,6 +465,24 @@ struct Call : public ExprNode<Call> {
         return make(param.type(), param.name(), args, Image, Function(), 0, Buffer(), param);
     }
 
+    /** Check if a call node is pure within a pipeline, meaning that
+     * the same args always give the same result, and the calls can be
+     * reordered, duplicated, unified, etc without changing the
+     * meaning of anything. Not transitive - doesn't guarantee the
+     * args themselves are pure. An example of a pure Call node is
+     * sqrt. If in doubt, don't mark a Call node as pure. */
+    bool is_pure() const {
+        return (call_type == PureExtern ||
+                call_type == Image ||
+                call_type == PureIntrinsic);
+    }
+
+    bool is_intrinsic(ConstString intrin_name) const {
+        return
+            ((call_type == Intrinsic ||
+              call_type == PureIntrinsic) &&
+             name == intrin_name);
+    }
 };
 
 /** A named variable. Might be a loop variable, function argument,

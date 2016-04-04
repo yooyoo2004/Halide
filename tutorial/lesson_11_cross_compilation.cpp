@@ -1,11 +1,7 @@
-// Halide tutorial lesson 11.
+// Halide tutorial lesson 11: Cross-compilation
 
-// This lesson demonstrates how to use Halide as a cross-compiler.
-
-// This lesson can be built by invoking the command:
-//    make tutorial_lesson_11_cross_compilation
-// in a shell with the current directory at the top of the halide source tree.
-// Otherwise, see the platform-specific compiler invocations below.
+// This lesson demonstrates how to use Halide as a cross-compiler to
+// generate code for any platform from any platform.
 
 // On linux, you can compile and run it like so:
 // g++ lesson_11*.cpp -g -std=c++11 -I ../include -L ../bin -lHalide -lpthread -ldl -o lesson_11
@@ -14,6 +10,12 @@
 // On os x:
 // g++ lesson_11*.cpp -g -std=c++11 -I ../include -L ../bin -lHalide -o lesson_11
 // DYLD_LIBRARY_PATH=../bin ./lesson_11
+
+// If you have the entire Halide source tree, you can also build it by
+// running:
+//    make tutorial_lesson_11_cross_compilation
+// in a shell with the current directory at the top of the halide
+// source tree.
 
 #include "Halide.h"
 #include <stdio.h>
@@ -56,7 +58,8 @@ int main(int argc, char **argv) {
     target.bits = 32;            // The bit-width of the architecture
     std::vector<Target::Feature> arm_features; // A list of features to set
     target.set_features(arm_features);
-    brighter.compile_to_file("lesson_11_arm_32_android", args, target); // Pass the target as the last argument.
+    // We then pass the target as the last argument to compile_to_file.
+    brighter.compile_to_file("lesson_11_arm_32_android", args, target);
 
     // And now a Windows object file for 64-bit x86 with AVX and SSE 4.1:
     target.os = Target::Windows;
@@ -90,12 +93,7 @@ int main(int argc, char **argv) {
     uint8_t arm_32_android_magic[] = {0x7f, 'E', 'L', 'F', // ELF format
                                       1,       // 32-bit
                                       1,       // 2's complement little-endian
-                                      1,       // Current version of elf
-                                      3,       // Linux
-                                      0, 0, 0, 0, 0, 0, 0, 0, // 8 unused bytes
-                                      1, 0,    // Relocatable
-                                      0x28, 0};  // ARM
-
+                                      1};      // Current version of elf
 
     FILE *f = fopen("lesson_11_arm_32_android.o", "rb");
     uint8_t header[32];
@@ -114,7 +112,7 @@ int main(int argc, char **argv) {
     // (presumably referring to x86-64)
     uint8_t win_64_magic[] = {0x64, 0x86};
 
-    f = fopen("lesson_11_x86_64_windows.o", "rb");
+    f = fopen("lesson_11_x86_64_windows.obj", "rb");
     if (!f || fread(header, 32, 1, f) != 1) {
         printf("Object file not generated\n");
         return -1;

@@ -34,7 +34,7 @@ EXPORT std::ostream &operator<<(std::ostream &stream, const Type &);
 EXPORT std::ostream &operator<<(std::ostream &stream, const Module &);
 
 /** Emit a halide device api type in a human readable form */
-std::ostream &operator<<(std::ostream &stream, const DeviceAPI &);
+EXPORT std::ostream &operator<<(std::ostream &stream, const DeviceAPI &);
 
 namespace Internal {
 
@@ -44,7 +44,7 @@ EXPORT std::ostream &operator<<(std::ostream &stream, const Stmt &);
 
 /** Emit a halide for loop type (vectorized, serial, etc) in a human
  * readable form */
-std::ostream &operator<<(std::ostream &stream, const ForType &);
+EXPORT std::ostream &operator<<(std::ostream &stream, const ForType &);
 
 /** An IRVisitor that emits IR to the given output stream in a human
  * readable form. Can be subclassed if you want to modify the way in
@@ -62,7 +62,7 @@ public:
     /** emit a statement on the output stream */
     void print(Stmt);
 
-    static void test();
+    EXPORT static void test();
 
 protected:
     /** The stream we're outputting on */
@@ -76,6 +76,7 @@ protected:
     void do_indent();
 
     void visit(const IntImm *);
+    void visit(const UIntImm *);
     void visit(const FloatImm *);
     void visit(const StringImm *);
     void visit(const Cast *);
@@ -104,7 +105,7 @@ protected:
     void visit(const Let *);
     void visit(const LetStmt *);
     void visit(const AssertStmt *);
-    void visit(const Pipeline *);
+    void visit(const ProducerConsumer *);
     void visit(const For *);
     void visit(const Store *);
     void visit(const Provide *);

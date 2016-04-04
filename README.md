@@ -18,81 +18,44 @@ To see some example code, look in the tutorials directory.
 If you've acquired a full source distribution and want to build
 Halide, see the notes below.
 
+Build Status
+============
 
-Some useful environment variables
-=================================
+| Linux                        |
+|------------------------------|
+| [![linux build status][1]][2]|
 
-HL_TARGET=... will set Halide's AOT compilation target.
-
-HL_JIT_TARGET=... will set Halide's JIT compilation target.
-
-HL_DEBUG_CODEGEN=1 will print out pseudocode for what Halide is
-compiling. Higher numbers will print more detail.
-
-HL_NUM_THREADS=... specifies the size of the thread pool. This has no
-effect on OS X or iOS, where we just use grand central dispatch.
-
-HL_TRACE=1 injects print statements into compiled Halide code that
-will describe what the program is doing at runtime. Higher values
-print more detail.
-
-HL_TRACE_FILE=... specifies a binary target file to dump tracing data
-into. The output can be parsed programmatically by starting from the
-code in utils/HalideTrace.cpp
-
-HL_PROFILE=1 injects timing data collection code. The output can be
-parsed using utils/HalideProf.cpp
-
-
-Using Halide on OSX
-===================
-
-Precompiled Halide distributions are built using XCode's command-line
-tools with Apple clang 500.2.76. This means that we link against
-libc++ instead of libstdc++. You may need to adjust compiler options
-accordingly if you're using an older XCode which does not default to
-libc++.
-
-For parallelism, Halide automatically uses Apple's Grand Central
-Dispatch, so it is not possible to control the number of threads used
-without overriding the parallel runtime entirely.
-
+[1]: https://travis-ci.org/halide/Halide.svg?branch=master
+[2]: https://travis-ci.org/halide/Halide
 
 Building Halide
 ===============
 
-Building halide requires at least llvm 3.5, along with the matching
+#### TL;DR
+
+Have llvm-3.7 or greater installed and run 'make' in the root
+directory of the repository (where this README is).
+
+#### Acquiring LLVM
+
+Building halide requires at least llvm 3.7, along with the matching
 version of clang. llvm-config and clang must be somewhere in the
-path. If your OS does not have packages for llvm-3.5, you can find
+path. If your OS does not have packages for llvm-3.7, you can find
 binaries for it at http://llvm.org/releases/download.html. Download an
 appropriate package and then either install it, or at least put the
 bin subdirectory in your path. (This works well on OS X and Ubuntu.)
 
 If you want to build it yourself, first check it out from subversion:
 
-    % svn co https://llvm.org/svn/llvm-project/llvm/branches/release_35 llvm3.5
-    % svn co https://llvm.org/svn/llvm-project/cfe/branches/release_35 llvm3.5/tools/clang
+    % svn co https://llvm.org/svn/llvm-project/llvm/branches/release_37 llvm3.7
+    % svn co https://llvm.org/svn/llvm-project/cfe/branches/release_37 llvm3.7/tools/clang
 
 Then build it like so:
 
-    % cd llvm3.5
-    % ./configure --disable-terminfo --enable-optimized --enable-assertions --with-clang --enable-targets=x86,arm,nvptx
-    % make -j8
-
-(Users of OSX 10.8+ may need to explicitly specify GCC vs Clang,
-prepending "CC=gcc CXX=g++" to the configure command.)
-
-Then finally tell Halide's Makefile about it like so:
-
-    % export LLVM_CONFIG=<path to llvm>/Release+Asserts/bin/llvm-config
-    % export CLANG=<path to llvm>/Release+Asserts/bin/clang
-
-If you wish to use cmake to build llvm, the build procedure is:
-
-    % cd llvm3.5
+    % cd llvm3.7
     % mkdir build
     % cd build
-    % cmake -DLLVM_ENABLE_TERMINFO=OFF -DLLVM_TARGETS_TO_BUILD="X86;ARM;NVPTX" -DLLVM_ENABLE_ASSERTIONS=ON -DCMAKE_BUILD_TYPE=Release ..
+    % cmake -DLLVM_ENABLE_TERMINFO=OFF -DLLVM_TARGETS_TO_BUILD="X86;ARM;NVPTX;AArch64;Mips;PowerPC" -DLLVM_ENABLE_ASSERTIONS=ON -DCMAKE_BUILD_TYPE=Release ..
     % make -j8
 
 then to point Halide to it:
@@ -100,25 +63,38 @@ then to point Halide to it:
     export LLVM_CONFIG=<path to llvm>/build/bin/llvm-config
     export CLANG=<path to llvm>/build/bin/clang
 
-With LLVM_CONFIG and CLANG set (or the appropriate llvm-config and
-clang in your path), you should be able to just run 'make' in this
-directory. 'make run_tests' will run the JIT test suite, and 'make
-test_apps' will make sure all the apps compile and run (but won't
-check their output).
+#### Building Halide with make
+
+With LLVM_CONFIG and CLANG set (or llvm-config and clang in your
+path), you should be able to just run 'make' in the root directory of
+the Halide source tree. 'make run_tests' will run the JIT test suite,
+and 'make test_apps' will make sure all the apps compile and run (but
+won't check their output).
 
 There is no 'make install' yet. If you want to make an install
 package, run 'make distrib'.
 
+#### Building Halide out-of-tree with make
+
+If you wish to build Halide in a separate directory, you can do that
+like so:
+
+    % cd ..
+    % mkdir halide_build
+    % cd halide_build
+    % make -f ../Halide/Makefile
+
+#### Building Halide with cmake
+
 If you wish to use cmake to build Halide, the build procedure is:
 
-    % mkdir build
-    % cd build
-    % LLVM_ROOT=/path/to/llvm3.5
-    % cmake -DLLVM_BIN=${LLVM_ROOT}/build/bin -DLLVM_INCLUDE="${LLVM_ROOT}/include;${LLVM_ROOT}/build/include" -DLLVM_LIB=${LLVM_ROOT}/build/lib -DLLVM_VERSION=35 ..
+    % mkdir cmake_build
+    % cd cmake_build
+    % export LLVM_ROOT=/path/to/llvm3.7/build
+    % cmake -DLLVM_BIN=${LLVM_ROOT}/bin -DLLVM_INCLUDE="${LLVM_ROOT}/../include;${LLVM_ROOT}/include" -DLLVM_LIB=${LLVM_ROOT}/lib -DLLVM_VERSION=37 ..
     % make -j8
 
-Building Halide and llvm as 32-bit on 64-bit linux
---------------------------------------------------
+#### Building Halide and llvm as 32-bit on 64-bit linux
 
 This is necessary if you want to JIT compile 32-bit code. It is not
 necessary for AOT compiling 32-bit Halide pipelines. The 64-bit
@@ -126,7 +102,7 @@ version of Halide cross-compiles 32-bit code just fine.
 
 To get a 32-bit llvm, configure and compile it like so:
 
-    % CC="gcc -m32" CXX="g++ -m32" ./configure --enable-targets=x86,arm,nvptx --enable-assertions --enable-optimized --build=i686-pc-linux-gnu
+    % CC="gcc -m32" CXX="g++ -m32" ./configure --enable-targets=x86,arm,nvptx,aarch64,mips --enable-assertions --enable-optimized --build=i686-pc-linux-gnu
     % CC="gcc -m32" CXX="g++ -m32" make
 
 To generate a 32-bit Halide, compile it like so:
@@ -146,8 +122,7 @@ The tests should pass, but the tutorials will fail to compile unless
 you manually supply a 32-bit libpng.
 
 
-Building Halide with Native Client support
-------------------------------------------
+#### Building Halide with Native Client support
 
 Halide is capable of generating Native Client (NaCl) object files and
 Portable Native Client (PNaCl) bitcode.  JIT compilation is not
@@ -175,7 +150,7 @@ To enable all Halide targets, build it like so:
 
     % mkdir build
     % cd build
-    % cmake -DLLVM_TARGETS_TO_BUILD="X86;ARM;NVPTX" -DLLVM_ENABLE_ASSERTIONS=ON -DLLVM_ENABLE_TERMINFO=OFF -DCMAKE_BUILD_TYPE=Release ..
+    % cmake -DLLVM_TARGETS_TO_BUILD="X86;ARM;NVPTX;AARCH64;MIPS" -DLLVM_ENABLE_ASSERTIONS=ON -DLLVM_ENABLE_TERMINFO=OFF -DCMAKE_BUILD_TYPE=Release ..
     % make -j8
 
 It will possibly be helpful to get the entire dev tree for
@@ -205,6 +180,42 @@ most of the apps Makefiles have been updated to work with cross
 compilation however. Try the app HelloNacl for a working example.
 
 
+Some useful environment variables
+=================================
+
+HL_TARGET=... will set Halide's AOT compilation target.
+
+HL_JIT_TARGET=... will set Halide's JIT compilation target.
+
+HL_DEBUG_CODEGEN=1 will print out pseudocode for what Halide is
+compiling. Higher numbers will print more detail.
+
+HL_NUM_THREADS=... specifies the size of the thread pool. This has no
+effect on OS X or iOS, where we just use grand central dispatch.
+
+HL_TRACE=1 injects print statements into compiled Halide code that
+will describe what the program is doing at runtime. Higher values
+print more detail.
+
+HL_TRACE_FILE=... specifies a binary target file to dump tracing data
+into. The output can be parsed programmatically by starting from the
+code in utils/HalideTraceViz.cpp
+
+
+Using Halide on OSX
+===================
+
+Precompiled Halide distributions are built using XCode's command-line
+tools with Apple clang 500.2.76. This means that we link against
+libc++ instead of libstdc++. You may need to adjust compiler options
+accordingly if you're using an older XCode which does not default to
+libc++.
+
+For parallelism, Halide automatically uses Apple's Grand Central
+Dispatch, so it is not possible to control the number of threads used
+without overriding the parallel runtime entirely.
+
+
 Halide OpenGL/GLSL backend
 ==========================
 
@@ -225,8 +236,7 @@ filters and convolutions; but a few common image processing operations such as
 histograms or recursive filters are notoriously hard to express in GLSL.
 
 
-Writing OpenGL-Based Filters
-----------------------------
+#### Writing OpenGL-Based Filters
 
 To enable code generation for OpenGL, include `opengl` in the target specifier
 passed to Halide. Since OpenGL shaders are limited in their computational
@@ -260,8 +270,7 @@ specified for both input and output buffers before scheduling:
     f.glsl(x, y, c);
 
 
-JIT Compilation
----------------
+#### JIT Compilation
 
 For JIT compilation Halide attempts to load the system libraries for opengl
 and creates a new context to use for each module. Windows is not yet supported.
@@ -269,8 +278,7 @@ and creates a new context to use for each module. Windows is not yet supported.
 Examples for JIT execution of OpenGL-based filters can be found in test/opengl.
 
 
-AOT Compilation
----------------
+#### AOT Compilation
 
 When AOT (ahead-of-time) compilation is used, Halide generates OpenGL-enabled
 object files that can be linked to and called from a host application. In
@@ -306,8 +314,7 @@ new context after the application resumes. Call `halide_opengl_context_lost`
 to reset Halide's OpenGL state after this has happened.
 
 
-Limitations
------------
+#### Limitations
 
 The current implementation of the OpenGL backend targets the common subset of
 OpenGL 2.0 and OpenGL ES 2.0 which is widely available on both mobile devices

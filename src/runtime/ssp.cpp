@@ -1,4 +1,3 @@
-#include "runtime_internal.h"
 #include "HalideRuntime.h"
 
 // LLVM sometimes likes to generate calls to a stack smashing
@@ -12,6 +11,7 @@ WEAK char *__stack_chk_guard = (char *)(0xdeadbeef);
 
 WEAK void __stack_chk_fail() {
     halide_error(NULL, "Memory error: stack smashing protector changed!\n");
+    abort();
 }
 
 }

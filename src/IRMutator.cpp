@@ -36,11 +36,12 @@ void mutate_binary_operator(IRMutator *mutator, const T *op, Expr *expr, Stmt *s
     } else {
         *expr = T::make(a, b);
     }
-    *stmt = NULL;
+    *stmt = nullptr;
 }
 }
 
 void IRMutator::visit(const IntImm *op)   {expr = op;}
+void IRMutator::visit(const UIntImm *op)   {expr = op;}
 void IRMutator::visit(const FloatImm *op) {expr = op;}
 void IRMutator::visit(const StringImm *op) {expr = op;}
 void IRMutator::visit(const Variable *op) {expr = op;}
@@ -105,14 +106,14 @@ void IRMutator::visit(const Ramp *op) {
         stride.same_as(op->stride)) {
         expr = op;
     } else {
-        expr = Ramp::make(base, stride, op->width);
+        expr = Ramp::make(base, stride, op->lanes);
     }
 }
 
 void IRMutator::visit(const Broadcast *op) {
     Expr value = mutate(op->value);
     if (value.same_as(op->value)) expr = op;
-    else expr = Broadcast::make(value, op->width);
+    else expr = Broadcast::make(value, op->lanes);
 }
 
 void IRMutator::visit(const Call *op) {
@@ -168,7 +169,7 @@ void IRMutator::visit(const AssertStmt *op) {
     }
 }
 
-void IRMutator::visit(const Pipeline *op) {
+void IRMutator::visit(const ProducerConsumer *op) {
     Stmt produce = mutate(op->produce);
     Stmt update = mutate(op->update);
     Stmt consume = mutate(op->consume);
@@ -177,7 +178,7 @@ void IRMutator::visit(const Pipeline *op) {
         consume.same_as(op->consume)) {
         stmt = op;
     } else {
-        stmt = Pipeline::make(op->name, produce, update, consume);
+        stmt = ProducerConsumer::make(op->name, produce, update, consume);
     }
 }
 
@@ -240,12 +241,17 @@ void IRMutator::visit(const Allocate *op) {
     }
     Stmt body = mutate(op->body);
     Expr condition = mutate(op->condition);
+    Expr new_expr;
+    if (op->new_expr.defined()) {
+        new_expr = mutate(op->new_expr);
+    }
     if (all_extents_unmodified &&
         body.same_as(op->body) &&
-        condition.same_as(op->condition)) {
+        condition.same_as(op->condition) &&
+        new_expr.same_as(op->new_expr)) {
         stmt = op;
     } else {
-        stmt = Allocate::make(op->name, op->type, new_extents, condition, body);
+        stmt = Allocate::make(op->name, op->type, new_extents, condition, body, new_expr, op->free_function);
     }
 }
 

@@ -1,16 +1,19 @@
-#include "pipeline_native.h"
+#include <cassert>
+#include <cstdio>
+#include <cstdlib>
+
+#include "halide_image.h"
 #include "pipeline_c.h"
-#include "../support/static_image.h"
-#include <assert.h>
-#include <stdio.h>
-#include <stdlib.h>
+#include "pipeline_native.h"
+
+using namespace Halide::Tools;
 
 extern "C" int an_extern_func(int x, int y) {
     return x + y;
 }
 
 extern "C" int an_extern_stage(buffer_t *in, buffer_t *out) {
-    if (in->host == NULL) {
+    if (in->host == nullptr) {
         // We expect a 2D input.
         in->extent[0] = 10;
         in->extent[1] = 10;

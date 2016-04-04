@@ -188,22 +188,6 @@ declare <2 x float> @llvm.arm.neon.vrecps.v2f32(<2 x float> %x, <2 x float> %y) 
 declare <4 x float> @llvm.arm.neon.vrsqrts.v4f32(<4 x float> %x, <4 x float> %y) nounwind readnone;
 declare <2 x float> @llvm.arm.neon.vrsqrts.v2f32(<2 x float> %x, <2 x float> %y) nounwind readnone;
 
-
-define weak_odr <4 x float> @fast_inverse_f32x4(<4 x float> %x) nounwind alwaysinline {
-       %approx = tail call <4 x float> @llvm.arm.neon.vrecpe.v4f32(<4 x float> %x)
-       %correction = tail call <4 x float> @llvm.arm.neon.vrecps.v4f32(<4 x float> %approx, <4 x float> %x)
-       %result = fmul <4 x float> %approx, %correction
-       ret <4 x float> %result
-}
-
-define weak_odr <4 x float> @fast_inverse_sqrt_f32x4(<4 x float> %x) nounwind alwaysinline {
-       %approx = tail call <4 x float> @llvm.arm.neon.vrsqrte.v4f32(<4 x float> %x)
-       %approx2 = fmul <4 x float> %approx, %approx
-       %correction = tail call <4 x float> @llvm.arm.neon.vrsqrts.v4f32(<4 x float> %approx2, <4 x float> %x)
-       %result = fmul <4 x float> %approx, %correction
-       ret <4 x float> %result
-}
-
 define weak_odr float @fast_inverse_f32(float %x) nounwind alwaysinline {
        %vec = insertelement <2 x float> undef, float %x, i32 0
        %approx = tail call <2 x float> @fast_inverse_f32x2(<2 x float> %vec)
@@ -218,12 +202,11 @@ define weak_odr <2 x float> @fast_inverse_f32x2(<2 x float> %x) nounwind alwaysi
        ret <2 x float> %result
 }
 
-define weak_odr <2 x float> @fast_inverse_sqrt_f32x2(<2 x float> %x) nounwind alwaysinline {
-       %approx = tail call <2 x float> @llvm.arm.neon.vrsqrte.v2f32(<2 x float> %x)
-       %approx2 = fmul <2 x float> %approx, %approx
-       %correction = tail call <2 x float> @llvm.arm.neon.vrsqrts.v2f32(<2 x float> %approx2, <2 x float> %x)
-       %result = fmul <2 x float> %approx, %correction
-       ret <2 x float> %result
+define weak_odr <4 x float> @fast_inverse_f32x4(<4 x float> %x) nounwind alwaysinline {
+       %approx = tail call <4 x float> @llvm.arm.neon.vrecpe.v4f32(<4 x float> %x)
+       %correction = tail call <4 x float> @llvm.arm.neon.vrecps.v4f32(<4 x float> %approx, <4 x float> %x)
+       %result = fmul <4 x float> %approx, %correction
+       ret <4 x float> %result
 }
 
 define weak_odr float @fast_inverse_sqrt_f32(float %x) nounwind alwaysinline {
@@ -233,8 +216,24 @@ define weak_odr float @fast_inverse_sqrt_f32(float %x) nounwind alwaysinline {
        ret float %result
 }
 
+define weak_odr <2 x float> @fast_inverse_sqrt_f32x2(<2 x float> %x) nounwind alwaysinline {
+       %approx = tail call <2 x float> @llvm.arm.neon.vrsqrte.v2f32(<2 x float> %x)
+       %approx2 = fmul <2 x float> %approx, %approx
+       %correction = tail call <2 x float> @llvm.arm.neon.vrsqrts.v2f32(<2 x float> %approx2, <2 x float> %x)
+       %result = fmul <2 x float> %approx, %correction
+       ret <2 x float> %result
+}
+
+define weak_odr <4 x float> @fast_inverse_sqrt_f32x4(<4 x float> %x) nounwind alwaysinline {
+       %approx = tail call <4 x float> @llvm.arm.neon.vrsqrte.v4f32(<4 x float> %x)
+       %approx2 = fmul <4 x float> %approx, %approx
+       %correction = tail call <4 x float> @llvm.arm.neon.vrsqrts.v4f32(<4 x float> %approx2, <4 x float> %x)
+       %result = fmul <4 x float> %approx, %correction
+       ret <4 x float> %result
+}
+
 define weak_odr <8 x i8> @strided_load_i8x8(i8 * %ptr, i32 %stride) nounwind alwaysinline {
-       %tmp = tail call {<8 x i8>, i8 *} asm "
+       %tmp = tail call {<8 x i8>, i8 *} asm sideeffect "
        vld1.8 $0[0], [$1], $3
        vld1.8 $0[1], [$1], $3
        vld1.8 $0[2], [$1], $3
@@ -263,7 +262,7 @@ define weak_odr void @strided_store_i8x8(i8 * %ptr, i32 %stride, <8 x i8> %val) 
 }
 
 define weak_odr <16 x i8> @strided_load_i8x16(i8 * %ptr, i32 %stride) nounwind alwaysinline {
-       %tmp = tail call {<16 x i8>, i8 *} asm "
+       %tmp = tail call {<16 x i8>, i8 *} asm sideeffect "
        vld1.8 ${0:e}[0], [$1], $3
        vld1.8 ${0:e}[1], [$1], $3
        vld1.8 ${0:e}[2], [$1], $3
@@ -308,7 +307,7 @@ define weak_odr void @strided_store_i8x16(i8 * %ptr, i32 %stride, <16 x i8> %val
 }
 
 define weak_odr <4 x i16> @strided_load_i16x4(i16 * %ptr, i32 %stride) nounwind alwaysinline {
-       %tmp = tail call {<4 x i16>, i16 *} asm "
+       %tmp = tail call {<4 x i16>, i16 *} asm sideeffect "
        vld1.16 $0[0], [$1], $3
        vld1.16 $0[1], [$1], $3
        vld1.16 $0[2], [$1], $3
@@ -329,7 +328,7 @@ define weak_odr void @strided_store_i16x4(i16 * %ptr, i32 %stride, <4 x i16> %va
 }
 
 define weak_odr <8 x i16> @strided_load_i16x8(i16 * %ptr, i32 %stride) nounwind alwaysinline {
-       %tmp = tail call {<8 x i16>, i16 *} asm "
+       %tmp = tail call {<8 x i16>, i16 *} asm sideeffect "
        vld1.16 ${0:e}[0], [$1], $3
        vld1.16 ${0:e}[1], [$1], $3
        vld1.16 ${0:e}[2], [$1], $3
@@ -358,7 +357,7 @@ define weak_odr void @strided_store_i16x8(i16 * %ptr, i32 %stride, <8 x i16> %va
 }
 
 define weak_odr <4 x i32> @strided_load_i32x4(i32 * %ptr, i32 %stride) nounwind alwaysinline {
-       %tmp = tail call {<4 x i32>, i32 *} asm "
+       %tmp = tail call {<4 x i32>, i32 *} asm sideeffect "
        vld1.32 ${0:e}[0], [$1], $3
        vld1.32 ${0:e}[1], [$1], $3
        vld1.32 ${0:f}[0], [$1], $3
@@ -379,7 +378,7 @@ define weak_odr void @strided_store_i32x4(i32 * %ptr, i32 %stride, <4 x i32> %va
 }
 
 define weak_odr <4 x float> @strided_load_f32x4(float * %ptr, i32 %stride) nounwind alwaysinline {
-       %tmp = tail call {<4 x float>, float *} asm "
+       %tmp = tail call {<4 x float>, float *} asm sideeffect "
        vld1.32 ${0:e}[0], [$1], $3
        vld1.32 ${0:e}[1], [$1], $3
        vld1.32 ${0:f}[0], [$1], $3
@@ -399,83 +398,3 @@ define weak_odr void @strided_store_f32x4(float * %ptr, i32 %stride, <4 x float>
        ret void
 }
 
-; Declare all the vlds and vsts. Declaring them here simplifies the codegen class.
-
-%v8xi8x2 = type { <8 x i8>, <8 x i8> }
-%v8xi8x3 = type { <8 x i8>, <8 x i8>, <8 x i8> }
-%v8xi8x4 = type { <8 x i8>, <8 x i8>, <8 x i8>, <8 x i8> }
-%v16xi8x2 = type { <16 x i8>, <16 x i8> }
-%v16xi8x3 = type { <16 x i8>, <16 x i8>, <16 x i8> }
-%v16xi8x4 = type { <16 x i8>, <16 x i8>, <16 x i8>, <16 x i8> }
-%v4xi16x2 = type { <4 x i16>, <4 x i16> }
-%v4xi16x3 = type { <4 x i16>, <4 x i16>, <4 x i16> }
-%v4xi16x4 = type { <4 x i16>, <4 x i16>, <4 x i16>, <4 x i16> }
-%v8xi16x2 = type { <8 x i16>, <8 x i16> }
-%v8xi16x3 = type { <8 x i16>, <8 x i16>, <8 x i16> }
-%v8xi16x4 = type { <8 x i16>, <8 x i16>, <8 x i16>, <8 x i16> }
-%v2xi32x2 = type { <2 x i32>, <2 x i32> }
-%v2xi32x3 = type { <2 x i32>, <2 x i32>, <2 x i32> }
-%v2xi32x4 = type { <2 x i32>, <2 x i32>, <2 x i32>, <2 x i32> }
-%v4xi32x2 = type { <4 x i32>, <4 x i32> }
-%v4xi32x3 = type { <4 x i32>, <4 x i32>, <4 x i32> }
-%v4xi32x4 = type { <4 x i32>, <4 x i32>, <4 x i32>, <4 x i32> }
-%v2xf32x2 = type { <2 x float>, <2 x float> }
-%v2xf32x3 = type { <2 x float>, <2 x float>, <2 x float> }
-%v2xf32x4 = type { <2 x float>, <2 x float>, <2 x float>, <2 x float> }
-%v4xf32x2 = type { <4 x float>, <4 x float> }
-%v4xf32x3 = type { <4 x float>, <4 x float>, <4 x float> }
-%v4xf32x4 = type { <4 x float>, <4 x float>, <4 x float>, <4 x float> }
-
-declare %v8xi8x2 @llvm.arm.neon.vld2.v8i8(i8* nocapture, i32) nounwind readonly
-declare %v16xi8x2 @llvm.arm.neon.vld2.v16i8(i8* nocapture, i32) nounwind readonly
-declare %v4xi16x2 @llvm.arm.neon.vld2.v4i16(i8* nocapture, i32) nounwind readonly
-declare %v8xi16x2 @llvm.arm.neon.vld2.v8i16(i8* nocapture, i32) nounwind readonly
-declare %v2xi32x2 @llvm.arm.neon.vld2.v2i32(i8* nocapture, i32) nounwind readonly
-declare %v4xi32x2 @llvm.arm.neon.vld2.v4i32(i8* nocapture, i32) nounwind readonly
-declare %v2xf32x2 @llvm.arm.neon.vld2.v2f32(i8* nocapture, i32) nounwind readonly
-declare %v4xf32x2 @llvm.arm.neon.vld2.v4f32(i8* nocapture, i32) nounwind readonly
-
-declare %v8xi8x3 @llvm.arm.neon.vld3.v8i8(i8* nocapture, i32) nounwind readonly
-declare %v16xi8x3 @llvm.arm.neon.vld3.v16i8(i8* nocapture, i32) nounwind readonly
-declare %v4xi16x3 @llvm.arm.neon.vld3.v4i16(i8* nocapture, i32) nounwind readonly
-declare %v8xi16x3 @llvm.arm.neon.vld3.v8i16(i8* nocapture, i32) nounwind readonly
-declare %v2xi32x3 @llvm.arm.neon.vld3.v2i32(i8* nocapture, i32) nounwind readonly
-declare %v4xi32x3 @llvm.arm.neon.vld3.v4i32(i8* nocapture, i32) nounwind readonly
-declare %v2xf32x3 @llvm.arm.neon.vld3.v2f32(i8* nocapture, i32) nounwind readonly
-declare %v4xf32x3 @llvm.arm.neon.vld3.v4f32(i8* nocapture, i32) nounwind readonly
-
-declare %v8xi8x4 @llvm.arm.neon.vld4.v8i8(i8* nocapture, i32) nounwind readonly
-declare %v16xi8x4 @llvm.arm.neon.vld4.v16i8(i8* nocapture, i32) nounwind readonly
-declare %v4xi16x4 @llvm.arm.neon.vld4.v4i16(i8* nocapture, i32) nounwind readonly
-declare %v8xi16x4 @llvm.arm.neon.vld4.v8i16(i8* nocapture, i32) nounwind readonly
-declare %v2xi32x4 @llvm.arm.neon.vld4.v2i32(i8* nocapture, i32) nounwind readonly
-declare %v4xi32x4 @llvm.arm.neon.vld4.v4i32(i8* nocapture, i32) nounwind readonly
-declare %v2xf32x4 @llvm.arm.neon.vld4.v2f32(i8* nocapture, i32) nounwind readonly
-declare %v4xf32x4 @llvm.arm.neon.vld4.v4f32(i8* nocapture, i32) nounwind readonly
-
-declare void @llvm.arm.neon.vst2.v2f32(i8* nocapture, <2 x float>, <2 x float>, i32) nounwind
-declare void @llvm.arm.neon.vst2.v2i32(i8* nocapture, <2 x i32>, <2 x i32>, i32) nounwind
-declare void @llvm.arm.neon.vst2.v4f32(i8* nocapture, <4 x float>, <4 x float>, i32) nounwind
-declare void @llvm.arm.neon.vst2.v4i16(i8* nocapture, <4 x i16>, <4 x i16>, i32) nounwind
-declare void @llvm.arm.neon.vst2.v4i32(i8* nocapture, <4 x i32>, <4 x i32>, i32) nounwind
-declare void @llvm.arm.neon.vst2.v8i16(i8* nocapture, <8 x i16>, <8 x i16>, i32) nounwind
-declare void @llvm.arm.neon.vst2.v8i8(i8* nocapture, <8 x i8>, <8 x i8>, i32) nounwind
-declare void @llvm.arm.neon.vst2.v16i8(i8* nocapture, <16 x i8>, <16 x i8>, i32) nounwind
-
-declare void @llvm.arm.neon.vst3.v2f32(i8* nocapture, <2 x float>, <2 x float>, <2 x float>, i32) nounwind
-declare void @llvm.arm.neon.vst3.v2i32(i8* nocapture, <2 x i32>, <2 x i32>, <2 x i32>, i32) nounwind
-declare void @llvm.arm.neon.vst3.v4f32(i8* nocapture, <4 x float>, <4 x float>, <4 x float>, i32) nounwind
-declare void @llvm.arm.neon.vst3.v4i16(i8* nocapture, <4 x i16>, <4 x i16>, <4 x i16>, i32) nounwind
-declare void @llvm.arm.neon.vst3.v4i32(i8* nocapture, <4 x i32>, <4 x i32>, <4 x i32>, i32) nounwind
-declare void @llvm.arm.neon.vst3.v8i16(i8* nocapture, <8 x i16>, <8 x i16>, <8 x i16>, i32) nounwind
-declare void @llvm.arm.neon.vst3.v8i8(i8* nocapture, <8 x i8>, <8 x i8>, <8 x i8>, i32) nounwind
-declare void @llvm.arm.neon.vst3.v16i8(i8* nocapture, <16 x i8>, <16 x i8>, <16 x i8>, i32) nounwind
-
-declare void @llvm.arm.neon.vst4.v2f32(i8* nocapture, <2 x float>, <2 x float>, <2 x float>, <2 x float>, i32) nounwind
-declare void @llvm.arm.neon.vst4.v2i32(i8* nocapture, <2 x i32>, <2 x i32>, <2 x i32>, <2 x i32>, i32) nounwind
-declare void @llvm.arm.neon.vst4.v4f32(i8* nocapture, <4 x float>, <4 x float>, <4 x float>, <4 x float>, i32) nounwind
-declare void @llvm.arm.neon.vst4.v4i16(i8* nocapture, <4 x i16>, <4 x i16>, <4 x i16>, <4 x i16>, i32) nounwind
-declare void @llvm.arm.neon.vst4.v4i32(i8* nocapture, <4 x i32>, <4 x i32>, <4 x i32>, <4 x i32>, i32) nounwind
-declare void @llvm.arm.neon.vst4.v8i16(i8* nocapture, <8 x i16>, <8 x i16>, <8 x i16>, <8 x i16>, i32) nounwind
-declare void @llvm.arm.neon.vst4.v8i8(i8* nocapture, <8 x i8>, <8 x i8>, <8 x i8>, <8 x i8>, i32) nounwind
-declare void @llvm.arm.neon.vst4.v16i8(i8* nocapture, <16 x i8>, <16 x i8>, <16 x i8>, <16 x i8>, i32) nounwind

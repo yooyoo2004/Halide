@@ -1,4 +1,4 @@
-#include "runtime_internal.h"
+#include "HalideRuntime.h"
 
 #ifndef __clockid_t_defined
 #define __clockid_t_defined 1
@@ -69,6 +69,11 @@ WEAK int64_t halide_current_time_ns(void *user_context) {
     int64_t d = int64_t(now.tv_sec - halide_reference_clock.tv_sec)*1000000000;
     int64_t nd = (now.tv_nsec - halide_reference_clock.tv_nsec);
     return d + nd;
+}
+
+extern int usleep(int);
+WEAK void halide_sleep_ms(void *user_context, int ms) {
+        usleep(ms * 1000);
 }
 
 }

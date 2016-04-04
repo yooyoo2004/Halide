@@ -19,12 +19,16 @@ class FiniteDifference : public IRMutator {
 
     using IRMutator::visit;
 
-    void visit(const IntImm *) {
-        expr = 0;
+    void visit(const IntImm *op) {
+        expr = make_zero(op->type);
     }
 
-    void visit(const FloatImm *) {
-        expr = 0.0f;
+    void visit(const UIntImm *op) {
+        expr = make_zero(op->type);
+    }
+
+    void visit(const FloatImm *op) {
+        expr = make_zero(op->type);
     }
 
     void visit(const Cast *op) {
@@ -104,6 +108,10 @@ class Monotonic : public IRVisitor {
         result = Constant;
     }
 
+    void visit(const UIntImm *) {
+        result = Constant;
+    }
+
     void visit(const FloatImm *) {
         result = Constant;
     }
@@ -120,7 +128,7 @@ class Monotonic : public IRVisitor {
             return;
         }
 
-        if (op->value.type().bits >= 32 && op->type.bits >= 32) {
+        if (op->value.type().bits() >= 32 && op->type.bits() >= 32) {
             // We assume 32-bit types don't overflow.
             return;
         }
@@ -302,7 +310,7 @@ class Monotonic : public IRVisitor {
 
     void visit(const Call *op) {
         // Some functions are known to be monotonic
-        if (op->name == Call::likely && op->call_type == Call::Intrinsic) {
+        if (op->is_intrinsic(Call::likely)) {
             op->args[0].accept(this);
             return;
         }
@@ -339,7 +347,7 @@ class Monotonic : public IRVisitor {
         internal_error << "Monotonic of statement\n";
     }
 
-    void visit(const Pipeline *op) {
+    void visit(const ProducerConsumer *op) {
         internal_error << "Monotonic of statement\n";
     }
 

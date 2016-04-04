@@ -6,7 +6,7 @@ namespace Halide {
 void check(const void *var, const std::string &type,
            const std::string &correct_name,
            const std::string &correct_file, int line) {
-    std::string correct_loc = correct_file + ":" + Halide::Internal::int_to_string(line);
+    std::string correct_loc = correct_file + ":" + std::to_string(line);
     std::string loc = Halide::Internal::Introspection::get_source_location();
     std::string name = Halide::Internal::Introspection::get_variable_name(var, type);
 
@@ -52,11 +52,9 @@ namespace {
 struct Bar {
     typedef int bint;
     bint bar_int;
-    Bar(int x) : bar_int(x) {
-        check(this, "Foo::{anonymous}::Bar", "b", __FILE__, __LINE__);
-        check(&bar_int, "Foo::{anonymous}::Bar::bint", "b.bar_int", __FILE__, __LINE__);
-    }
-    ~Bar() {
+    Bar(int x) : bar_int(x) {}
+    ~Bar() {}
+    void check_bar() {
         check(this, "Foo::{anonymous}::Bar", "b", __FILE__, __LINE__);
         check(&bar_int, "Foo::{anonymous}::Bar::bint", "b.bar_int", __FILE__, __LINE__);
     }
@@ -67,6 +65,7 @@ struct Bar {
 
 int g(int x) {
     Bar b(x*7);
+    b.check_bar();
     return b.get();
 }
 
@@ -125,7 +124,8 @@ int main(int argc, char **argv) {
 
     // .. unless they're members of explicitly registered objects
     HeapObject *obj = new HeapObject;
-    static HeapObject *dummy_heap_object_ptr = NULL;
+    static HeapObject *dummy_heap_object_ptr = nullptr;
+    check(&dummy_heap_object_ptr, "HeapObject *", "dummy_heap_object_ptr", __FILE__, __LINE__);
     Halide::Internal::Introspection::register_heap_object(obj, sizeof(HeapObject), &dummy_heap_object_ptr);
     check(&(obj->f), "float", "f", __FILE__, __LINE__);
     check(&(obj->f2), "fancy_float", "f2", __FILE__, __LINE__);

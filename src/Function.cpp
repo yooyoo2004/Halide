@@ -1,5 +1,6 @@
 #include <set>
 #include <stdlib.h>
+#include <atomic>
 
 #include "IR.h"
 #include "Function.h"
@@ -18,6 +19,83 @@ namespace Internal {
 using std::vector;
 using std::string;
 using std::set;
+
+struct FunctionContents {
+    mutable RefCount ref_count;
+    std::string name;
+    std::vector<std::string> args;
+    std::vector<Expr> values;
+    std::vector<Type> output_types;
+    Schedule schedule;
+
+    std::vector<UpdateDefinition> updates;
+
+    std::string debug_file;
+
+    std::vector<Parameter> output_buffers;
+
+    std::vector<ExternFuncArgument> extern_arguments;
+    std::string extern_function_name;
+    bool extern_is_c_plus_plus;
+
+    bool trace_loads, trace_stores, trace_realizations;
+
+    bool frozen;
+
+    FunctionContents() : extern_is_c_plus_plus(false), trace_loads(false),
+                         trace_stores(false), trace_realizations(false),
+                         frozen(false) {}
+
+    void accept(IRVisitor *visitor) const {
+        for (Expr i : values) {
+            i.accept(visitor);
+        }
+
+        schedule.accept(visitor);
+
+        for (UpdateDefinition update : updates) {
+            for (Expr i : update.values) {
+                i.accept(visitor);
+            }
+            for (Expr i : update.args) {
+                i.accept(visitor);
+            }
+
+            if (update.domain.defined()) {
+                for (ReductionVariable rv : update.domain.domain()) {
+                    rv.min.accept(visitor);
+                    rv.extent.accept(visitor);
+                }
+            }
+
+            update.schedule.accept(visitor);
+        }
+
+        if (!extern_function_name.empty()) {
+            for (ExternFuncArgument i : extern_arguments) {
+                if (i.is_func()) {
+                    i.func.ptr->accept(visitor);
+                } else if (i.is_expr()) {
+                    i.expr.accept(visitor);
+                }
+            }
+        }
+
+        for (Parameter i : output_buffers) {
+            for (size_t j = 0; j < args.size() && j < 4; j++) {
+                if (i.min_constraint(j).defined()) {
+                    i.min_constraint(j).accept(visitor);
+                }
+                if (i.stride_constraint(j).defined()) {
+                    i.stride_constraint(j).accept(visitor);
+                }
+                if (i.extent_constraint(j).defined()) {
+                    i.extent_constraint(j).accept(visitor);
+                }
+            }
+        }
+    }
+};
 
 template<>
 EXPORT RefCount &ref_count<FunctionContents>(const FunctionContents *f) {
@@ -134,7 +212,20 @@ public:
 
 // A counter to use in tagging random variables
 namespace {
-static int rand_counter = 0;
+static std::atomic<int> rand_counter;
+}
+
+Function::Function() : contents(new FunctionContents) {
+}
+
+Function::Function(const std::string &n) : contents(new FunctionContents) {
+    for (size_t i = 0; i < n.size(); i++) {
+        user_assert(n[i] != '.')
+            << "Func name \"" << n << "\" is invalid. "
+            << "Func names may not contain the character '.', "
+            << "as it is used internally by Halide as a separator\n";
+    }
+    contents.ptr->name = n;
 }
 
 void Function::define(const vector<string> &args, vector<Expr> values) {
@@ -226,7 +317,7 @@ void Function::define(const vector<string> &args, vector<Expr> values) {
     for (size_t i = 0; i < values.size(); i++) {
         string buffer_name = name();
         if (values.size() > 1) {
-            buffer_name += '.' + int_to_string((int)i);
+            buffer_name += '.' + std::to_string((int)i);
         }
         Parameter output(values[i].type(), true, args.size(), buffer_name);
         contents.ptr->output_buffers.push_back(output);
@@ -234,10 +325,12 @@ void Function::define(const vector<string> &args, vector<Expr> values) {
 }
 
 void Function::define_update(const vector<Expr> &_args, vector<Expr> values) {
+    int update_idx = static_cast<int>(contents.ptr->updates.size());
+
     user_assert(!name().empty())
         << "Func has an empty name.\n";
     user_assert(has_pure_definition())
-        << "In update definition of Func \"" << name() << "\":\n"
+        << "In update definition " << update_idx << " of Func \"" << name() << "\":\n"
         << "Can't add an update definition without a pure definition first.\n";
     user_assert(!frozen())
         << "Func " << name() << " cannot be given a new update definition, "
@@ -245,18 +338,18 @@ void Function::define_update(const vector<Expr> &_args, vector<Expr> values) {
 
     for (size_t i = 0; i < values.size(); i++) {
         user_assert(values[i].defined())
-            << "In update definition of Func \"" << name() << "\":\n"
+            << "In update definition " << update_idx << " of Func \"" << name() << "\":\n"
             << "Undefined expression in right-hand-side of update.\n";
 
     }
 
     // Check the dimensionality matches
     user_assert((int)_args.size() == dimensions())
-        << "In update definition of Func \"" << name() << "\":\n"
+        << "In update definition " << update_idx << " of Func \"" << name() << "\":\n"
         << "Dimensionality of update definition must match dimensionality of pure definition.\n";
 
     user_assert(values.size() == contents.ptr->values.size())
-        << "In update definition of Func \"" << name() << "\":\n"
+        << "In update definition " << update_idx << " of Func \"" << name() << "\":\n"
         << "Number of tuple elements for update definition must "
         << "match number of tuple elements for pure definition.\n";
 
@@ -267,7 +360,7 @@ void Function::define_update(const vector<Expr> &_args, vector<Expr> values) {
         Type pure_type = contents.ptr->values[i].type();
         if (pure_type != values[i].type()) {
             std::ostringstream err;
-            err << "In update definition of Func \"" << name() << "\":\n";
+            err << "In update definition " << update_idx << " of Func \"" << name() << "\":\n";
             if (values.size()) {
                 err << "Tuple element " << i << " of update definition has type ";
             } else {
@@ -292,7 +385,7 @@ void Function::define_update(const vector<Expr> &_args, vector<Expr> values) {
     for (size_t i = 0; i < args.size(); i++) {
         pure_args[i] = ""; // Will never match a var name
         user_assert(args[i].defined())
-            << "In update definition of Func \"" << name() << "\":\n"
+            << "In update definition " << update_idx << " of Func \"" << name() << "\":\n"
             << "Argument " << i
             << " in left-hand-side of update definition is undefined.\n";
         if (const Variable *var = args[i].as<Variable>()) {
@@ -372,8 +465,8 @@ void Function::define_update(const vector<Expr> &_args, vector<Expr> values) {
     }
 
     for (int i = 0; i < counter.count; i++) {
-        contents.ptr->ref_count.decrement();
-        internal_assert(!contents.ptr->ref_count.is_zero());
+        int count = contents.ptr->ref_count.decrement();
+        internal_assert(count != 0);
     }
 
     // First add any reduction domain
@@ -413,7 +506,7 @@ void Function::define_update(const vector<Expr> &_args, vector<Expr> values) {
         counter.count == 0 &&
         pure) {
         user_warning
-            << "In update definition of Func \"" << name() << "\":\n"
+            << "In update definition " << update_idx << " of Func \"" << name() << "\":\n"
             << "Update definition completely hides earlier definitions, "
             << " because all the arguments are pure, it contains no self-references, "
             << " and no reduction domain. This may be an accidental re-definition of "
@@ -427,7 +520,8 @@ void Function::define_update(const vector<Expr> &_args, vector<Expr> values) {
 void Function::define_extern(const std::string &function_name,
                              const std::vector<ExternFuncArgument> &args,
                              const std::vector<Type> &types,
-                             int dimensionality) {
+                             int dimensionality,
+                             bool is_c_plus_plus) {
 
     user_assert(!has_pure_definition() && !has_update_definition())
         << "In extern definition for Func \"" << name() << "\":\n"
@@ -440,11 +534,12 @@ void Function::define_extern(const std::string &function_name,
     contents.ptr->extern_function_name = function_name;
     contents.ptr->extern_arguments = args;
     contents.ptr->output_types = types;
+    contents.ptr->extern_is_c_plus_plus = is_c_plus_plus;
 
     for (size_t i = 0; i < types.size(); i++) {
         string buffer_name = name();
         if (types.size() > 1) {
-            buffer_name += '.' + int_to_string((int)i);
+            buffer_name += '.' + std::to_string((int)i);
         }
         Parameter output(types[i], true, dimensionality, buffer_name);
         contents.ptr->output_buffers.push_back(output);
@@ -457,7 +552,101 @@ void Function::define_extern(const std::string &function_name,
         contents.ptr->args[i] = arg;
         contents.ptr->schedule.storage_dims().push_back(arg);
     }
+}
 
+void Function::accept(IRVisitor *visitor) const {
+    contents.ptr->accept(visitor);
+}
+
+const std::string &Function::name() const {
+    return contents.ptr->name;
+}
+
+const std::vector<std::string> &Function::args() const {
+    return contents.ptr->args;
+}
+
+const std::vector<Type> &Function::output_types() const {
+    return contents.ptr->output_types;
+}
+
+const std::vector<Expr> &Function::values() const {
+    return contents.ptr->values;
+}
+
+Schedule &Function::schedule() {
+    return contents.ptr->schedule;
+}
+
+const Schedule &Function::schedule() const {
+    return contents.ptr->schedule;
+}
+
+const std::vector<Parameter> &Function::output_buffers() const {
+    return contents.ptr->output_buffers;
+}
+
+Schedule &Function::update_schedule(int idx) {
+    return contents.ptr->updates[idx].schedule;
+}
+
+const std::vector<UpdateDefinition> &Function::updates() const {
+    return contents.ptr->updates;
+}
+
+bool Function::has_update_definition() const {
+    return !contents.ptr->updates.empty();
+}
+
+bool Function::has_extern_definition() const {
+    return !contents.ptr->extern_function_name.empty();
+}
+
+bool Function::extern_definition_is_c_plus_plus() const {
+    return contents.ptr->extern_is_c_plus_plus;
+}
+
+const std::vector<ExternFuncArgument> &Function::extern_arguments() const {
+    return contents.ptr->extern_arguments;
+}
+
+const std::string &Function::extern_function_name() const {
+    return contents.ptr->extern_function_name;
+}
+
+const std::string &Function::debug_file() const {
+    return contents.ptr->debug_file;
+}
+
+std::string &Function::debug_file() {
+    return contents.ptr->debug_file;
+}
+
+void Function::trace_loads() {
+    contents.ptr->trace_loads = true;
+}
+void Function::trace_stores() {
+    contents.ptr->trace_stores = true;
+}
+void Function::trace_realizations() {
+    contents.ptr->trace_realizations = true;
+}
+bool Function::is_tracing_loads() const {
+    return contents.ptr->trace_loads;
+}
+bool Function::is_tracing_stores() const {
+    return contents.ptr->trace_stores;
+}
+bool Function::is_tracing_realizations() const {
+    return contents.ptr->trace_realizations;
+}
+
+void Function::freeze() {
+    contents.ptr->frozen = true;
+}
+
+bool Function::frozen() const {
+    return contents.ptr->frozen;
 }
 
 }

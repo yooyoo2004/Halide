@@ -43,129 +43,6 @@
 namespace Halide {
 namespace Internal {
 
-/** Build small vectors of up to 10 elements. If we used C++11 and
- * had vector initializers, this would not be necessary, but we
- * don't want to rely on C++11 support. */
-//@{
-template<typename T>
-std::vector<T> vec(T a) {
-    std::vector<T> v(1);
-    v[0] = a;
-    return v;
-}
-
-template<typename T>
-std::vector<T> vec(T a, T b) {
-    std::vector<T> v(2);
-    v[0] = a;
-    v[1] = b;
-    return v;
-}
-
-template<typename T>
-std::vector<T> vec(T a, T b, T c) {
-    std::vector<T> v(3);
-    v[0] = a;
-    v[1] = b;
-    v[2] = c;
-    return v;
-}
-
-template<typename T>
-std::vector<T> vec(T a, T b, T c, T d) {
-    std::vector<T> v(4);
-    v[0] = a;
-    v[1] = b;
-    v[2] = c;
-    v[3] = d;
-    return v;
-}
-
-template<typename T>
-std::vector<T> vec(T a, T b, T c, T d, T e) {
-    std::vector<T> v(5);
-    v[0] = a;
-    v[1] = b;
-    v[2] = c;
-    v[3] = d;
-    v[4] = e;
-    return v;
-}
-
-template<typename T>
-std::vector<T> vec(T a, T b, T c, T d, T e, T f) {
-    std::vector<T> v(6);
-    v[0] = a;
-    v[1] = b;
-    v[2] = c;
-    v[3] = d;
-    v[4] = e;
-    v[5] = f;
-    return v;
-}
-
-template<typename T>
-std::vector<T> vec(T a, T b, T c, T d, T e, T f, T g) {
-    std::vector<T> v(7);
-    v[0] = a;
-    v[1] = b;
-    v[2] = c;
-    v[3] = d;
-    v[4] = e;
-    v[5] = f;
-    v[6] = g;
-    return v;
-}
-
-template<typename T>
-std::vector<T> vec(T a, T b, T c, T d, T e, T f, T g, T h) {
-    std::vector<T> v(8);
-    v[0] = a;
-    v[1] = b;
-    v[2] = c;
-    v[3] = d;
-    v[4] = e;
-    v[5] = f;
-    v[6] = g;
-    v[7] = h;
-    return v;
-}
-
-template<typename T>
-std::vector<T> vec(T a, T b, T c, T d, T e, T f, T g, T h, T i) {
-    std::vector<T> v(9);
-    v[0] = a;
-    v[1] = b;
-    v[2] = c;
-    v[3] = d;
-    v[4] = e;
-    v[5] = f;
-    v[6] = g;
-    v[7] = h;
-    v[8] = i;
-    return v;
-}
-
-template<typename T>
-std::vector<T> vec(T a, T b, T c, T d, T e, T f, T g, T h, T i, T j) {
-    std::vector<T> v(10);
-    v[0] = a;
-    v[1] = b;
-    v[2] = c;
-    v[3] = d;
-    v[4] = e;
-    v[5] = f;
-    v[6] = g;
-    v[7] = h;
-    v[8] = i;
-    v[9] = j;
-    return v;
-}
-// @}
-
-/** Convert an integer to a string. */
-EXPORT std::string int_to_string(int x);
-
 /** An aggressive form of reinterpret cast used for correct type-punning. */
 template<typename DstType, typename SrcType>
 DstType reinterpret_bits(const SrcType &src) {
@@ -179,6 +56,16 @@ DstType reinterpret_bits(const SrcType &src) {
  * variable passed in. If introspection isn't working or there are no
  * debug symbols, just uses unique_name with the given prefix. */
 EXPORT std::string make_entity_name(void *stack_ptr, const std::string &type, char prefix);
+
+/** Get value of an environment variable. Returns its value
+ * is defined in the environment. Input: env_var_name. Output: var_defined.
+ * Sets to true var_defined if the environment var is defined; false otherwise.
+ */
+EXPORT std::string get_env_variable(char const *env_var_name, size_t &var_defined);
+
+/** Get the name of the currently running executable. Platform-specific.
+ * If program name cannot be retrieved, function returns an empty string. */
+EXPORT std::string running_program_name();
 
 /** Generate a unique name starting with the given character. It's
  * unique relative to all other calls to unique_name done by this
@@ -197,7 +84,7 @@ EXPORT bool ends_with(const std::string &str, const std::string &suffix);
 
 /** Replace all matches of the second string in the first string with the last string */
 EXPORT std::string replace_all(std::string &str, const std::string &find, const std::string &replace);
-    
+
 /** Return the final token of the name string using the given delimiter. */
 EXPORT std::string base_name(const std::string &name, char delim = '.');
 
@@ -242,6 +129,9 @@ struct meta_and<T1, Args...> : std::integral_constant<bool, T1::value && meta_an
 
 template<typename To, typename... Args>
 struct all_are_convertible : meta_and<std::is_convertible<Args, To>...> {};
+
+/** Returns base name and fills in namespaces, outermost one first in vector. */
+std::string extract_namespaces(const std::string &name, std::vector<std::string> &namespaces);
 
 }
 }

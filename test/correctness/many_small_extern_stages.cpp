@@ -1,7 +1,7 @@
 #include "Halide.h"
 #include <stdio.h>
 
-#ifdef _MSC_VER
+#ifdef _WIN32
 #define DLLEXPORT __declspec(dllexport)
 #else
 #define DLLEXPORT
@@ -18,10 +18,10 @@ extern "C" DLLEXPORT int copy(buffer_t *in, buffer_t *out) {
            in->stride[0], in->stride[1], in->stride[2], in->stride[3],
            in->extent[0], in->extent[1], in->extent[2], in->extent[3]);
     */
-    if (in->host == NULL) {
+    if (in->host == nullptr) {
         // Give it all the same metadata
         (*in) = (*out);
-        in->host = NULL;
+        in->host = nullptr;
         in->dev = 0;
         in->host_dirty = false;
         in->dev_dirty = false;
@@ -70,9 +70,7 @@ int main(int argc, char **argv) {
     f(x, y) = x*x + y;
 
     // Name of the function and the args, then types of the outputs, then dimensionality
-    g.define_extern("copy",
-                    Internal::vec<ExternFuncArgument>(f),
-                    Int(32), 2);
+    g.define_extern("copy", {f}, Int(32), 2);
 
     RDom r(0, 100);
     h(x, y) += r * (g(x, y) - f(x, y));

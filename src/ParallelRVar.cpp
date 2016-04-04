@@ -4,6 +4,8 @@
 #include "Debug.h"
 #include "Simplify.h"
 #include "IROperator.h"
+#include "Substitute.h"
+#include "CSE.h"
 
 namespace Halide {
 namespace Internal {
@@ -12,9 +14,8 @@ using std::string;
 using std::vector;
 using std::map;
 
-/** Find all calls arguments to the given function. Note that we don't
- * pick up lets for simplicity. This makes the comparison
- * conservative, because the let variables become unknowns. */
+/** Find all calls arguments to the given function. Substitutes in
+ * lets, so take care with the combinatorially large results. */
 class FindLoads : public IRVisitor {
     using IRVisitor::visit;
 
@@ -27,10 +28,19 @@ class FindLoads : public IRVisitor {
         IRVisitor::visit(op);
     }
 
+    void visit(const Let *op) {
+        IRVisitor::visit(op);
+        for (size_t i = 0; i < loads.size(); i++) {
+            for (size_t j = 0; j < loads[i].size(); j++) {
+                loads[i][j] = substitute(op->name, op->value, loads[i][j]);
+            }
+        }
+    }
+
 public:
     FindLoads(const string &f) : func(f) {}
 
-    vector<vector<Expr> > loads;
+    vector<vector<Expr>> loads;
 };
 
 /** Rename all free variables to unique new names. */
@@ -62,6 +72,20 @@ public:
 
 
 };
+
+/** Substitute in boolean expressions. */
+class SubstituteInBooleanLets : public IRMutator {
+    using IRMutator::visit;
+
+    void visit(const Let *op) {
+        if (op->value.type() == Bool()) {
+            expr = substitute(op->name, mutate(op->value), mutate(op->body));
+        } else {
+            IRMutator::visit(op);
+        }
+    }
+};
+
 
 bool can_parallelize_rvar(const string &v,
                           const string &f,
@@ -114,8 +138,16 @@ bool can_parallelize_rvar(const string &v,
     }
 
     debug(3) << "Attempting to falsify: " << hazard << "\n";
+    // Pull out common non-boolean terms
+    hazard = common_subexpression_elimination(hazard);
+    hazard = SubstituteInBooleanLets().mutate(hazard);
     hazard = simplify(hazard, false, bounds);
     debug(3) << "Simplified to: " << hazard << "\n";
+
+    // strip lets
+    while (const Let *l = hazard.as<Let>()) {
+        hazard = l->body;
+    }
 
     return is_zero(hazard);
 }

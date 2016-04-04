@@ -12,24 +12,29 @@
 #include "Error.h"
 #include "Type.h"
 #include "Util.h"
+#include "Expr.h"
 
 namespace Halide {
 
 /** A struct representing a target machine and os to generate code for. */
 struct Target {
     /** The operating system used by the target. Determines which
-     * system calls to generate. */
+     * system calls to generate.
+     * Corresponds to os_name_map in Target.cpp. */
     enum OS {OSUnknown = 0, Linux, Windows, OSX, Android, IOS, NaCl} os;
 
     /** The architecture used by the target. Determines the
      * instruction set to use. For the PNaCl target, the "instruction
-     * set" is actually llvm bitcode. */
-    enum Arch {ArchUnknown = 0, X86, ARM, PNaCl, MIPS} arch;
+     * set" is actually llvm bitcode.
+     * Corresponds to arch_name_map in Target.cpp. */
+    enum Arch {ArchUnknown = 0, X86, ARM, PNaCl, MIPS, POWERPC} arch;
 
     /** The bit-width of the target machine. Must be 0 for unknown, or 32 or 64. */
     int bits;
 
-    /** Optional features a target can have. */
+    /** Optional features a target can have.
+     * Corresponds to feature_name_map in Target.cpp. */
+
     enum Feature {
         JIT,  ///< Generate code that will run immediately inside the calling process.
         Debug,  ///< Turn on debug info and output for runtime code.
@@ -46,6 +51,9 @@ struct Target {
         ARMv7s,  ///< Generate code for ARMv7s. Only relevant for 32-bit ARM.
         NoNEON,  ///< Avoid using NEON instructions. Only relevant for 32-bit ARM.
 
+        VSX,  ///< Use VSX instructions. Only relevant on POWERPC.
+        POWER_ARCH_2_07,  ///< Use POWER ISA 2.07 new instructions. Only relevant on POWERPC.
+
         CUDA,  ///< Enable the CUDA runtime. Defaults to compute capability 2.0 (Fermi)
         CUDACapability30,  ///< Enable CUDA compute capability 3.0 (Kepler)
         CUDACapability32,  ///< Enable CUDA compute capability 3.2 (Tegra K1)
@@ -56,6 +64,9 @@ struct Target {
         CLDoubles,  ///< Enable double support on OpenCL targets
 
         OpenGL,  ///< Enable the OpenGL runtime.
+        OpenGLCompute, ///< Enable OpenGL Compute runtime.
+
+        Renderscript, ///< Enable the Renderscript runtime.
 
         UserContext,  ///< Generated code takes a user_context pointer as first argument
 
@@ -63,9 +74,15 @@ struct Target {
 
         Matlab,  ///< Generate a mexFunction compatible with Matlab mex libraries. See tools/mex_halide.m.
 
-        FeatureEnd
-        // NOTE: Changes to this enum must be reflected in the definition of
-        // to_string()!
+        Profile, ///< Launch a sampling profiler alongside the Halide pipeline that monitors and reports the runtime used by each Func
+        NoRuntime, ///< Do not include a copy of the Halide runtime in any generated object file or assembly
+
+        Metal, ///< Enable the (Apple) Metal runtime.
+        MinGW, ///< For Windows compile to MinGW toolset rather then Visual Studio
+
+        CPlusPlusMangling, ///< Generate C++ mangled names for result function, et al
+
+        FeatureEnd ///< A sentinel. Every target is considered to have this feature, and setting this feature does nothing.
     };
 
     Target() : os(OSUnknown), arch(ArchUnknown), bits(0) {}
@@ -77,26 +94,26 @@ struct Target {
     }
 
     void set_feature(Feature f, bool value = true) {
+        if (f == FeatureEnd) return;
         user_assert(f < FeatureEnd) << "Invalid Target feature.\n";
         features.set(f, value);
     }
 
     void set_features(std::vector<Feature> features_to_set, bool value = true) {
-        for (size_t i = 0; i < features_to_set.size(); i++) {
-            set_feature(features_to_set[i], value);
+        for (Feature f : features_to_set) {
+            set_feature(f, value);
         }
     }
 
     bool has_feature(Feature f) const {
+        if (f == FeatureEnd) return true;
         user_assert(f < FeatureEnd) << "Invalid Target feature.\n";
         return features[f];
     }
 
     bool features_any_of(std::vector<Feature> test_features) const {
-        for (size_t i = 0; i < test_features.size(); i++) {
-            user_assert(test_features[i] < FeatureEnd) << "Invalid Target feature.\n";
-
-            if (features[test_features[i]]) {
+        for (Feature f : test_features) {
+            if (has_feature(f)) {
                 return true;
             }
         }
@@ -104,10 +121,8 @@ struct Target {
     }
 
     bool features_all_of(std::vector<Feature> test_features) const {
-        for (size_t i = 0; i < test_features.size(); i++) {
-            user_assert(test_features[i] < FeatureEnd) << "Invalid Target feature.\n";
-
-            if (!features[test_features[i]]) {
+        for (Feature f : test_features) {
+            if (!has_feature(f)) {
                 return false;
             }
         }
@@ -134,13 +149,35 @@ struct Target {
         return copy;
     }
 
-    /** Is OpenCL or CUDA enabled in this target? I.e. is
-     * Func::gpu_tile and similar going to work? We do not include
-     * OpenGL, because it is not capable of gpgpu, and is not
-     * scheduled via Func::gpu_tile. */
+    /** Is a fully feature GPU compute runtime enabled? I.e. is
+     * Func::gpu_tile and similar going to work? Currently includes
+     * CUDA, OpenCL, and Metal. We do not include OpenGL, because it
+     * is not capable of gpgpu, and is not scheduled via
+     * Func::gpu_tile.
+     * TODO: Should OpenGLCompute be included here? */
     bool has_gpu_feature() const {
-        return has_feature(CUDA) || has_feature(OpenCL);
+      return has_feature(CUDA) || has_feature(OpenCL) || has_feature(Metal);
     }
+
+    /** Does this target allow using a certain type. Generally all
+     * types except 64-bit float and int/uint should be supported by
+     * all backends.
+     */
+    bool supports_type(const Type &t) {
+        if (t.bits() == 64) {
+            if (t.is_float()) {
+                return !has_feature(Metal) &&
+                       (!has_feature(Target::OpenCL) || has_feature(Target::CLDoubles));
+            } else {
+                return !has_feature(Metal);
+            }
+        }
+        return true;
+    }
+
+    /** Returns whether a particular device API can be used with this
+     * Target. */
+    bool supports_device_api(DeviceAPI api) const;
 
     bool operator==(const Target &other) const {
       return os == other.os &&
@@ -210,7 +247,7 @@ struct Target {
         // better performance. (AVX2 does have good integer operations for 256-bit
         // registers.)
         const int vector_byte_size = (is_avx2 || (is_avx && !is_integer)) ? 32 : 16;
-        const int data_size = t.bits / 8;
+        const int data_size = t.bytes();
         return vector_byte_size / data_size;
     }
 
@@ -220,6 +257,9 @@ struct Target {
     int natural_vector_size() const {
         return natural_vector_size(type_of<data_t>());
     }
+
+    /** Was libHalide compiled with support for this target? */
+    EXPORT bool supported() const;
 
 private:
     /** A bitmask that stores the active features. */
@@ -247,6 +287,18 @@ EXPORT Target get_jit_target_from_environment();
  * will be used instead. An empty string is exactly equivalent to get_host_target().
  */
 EXPORT Target parse_target_string(const std::string &target);
+
+
+/** Get the Target feature corresponding to a DeviceAPI. For device
+ * apis that do not correspond to any single target feature, returns
+ * Target::FeatureEnd */
+EXPORT Target::Feature target_feature_for_device_api(DeviceAPI api);
+
+namespace Internal {
+
+EXPORT void target_test();
+
+}
 
 }
 

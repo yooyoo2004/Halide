@@ -15,9 +15,9 @@ namespace Internal {
  * as wildcards, and their matching equivalent in the second
  * expression is placed in the vector give as the third argument.
  * Wildcards require the types to match. For the type bits and width,
- * a -1 indicates "match anything". So an Int(8, -1) will match 8-bit
- * integer vectors of any width (including scalars), and a UInt(-1,
- * -1) will match any unsigned integer type.
+ * a 0 indicates "match anything". So an Int(8, 0) will match 8-bit
+ * integer vectors of any width (including scalars), and a UInt(0, 0)
+ * will match any unsigned integer type.
  *
  * For example:
  \code
@@ -27,7 +27,7 @@ namespace Internal {
  * should return true, and set result[0] to 3 and
  * result[1] to 2*k.
  */
-bool expr_match(Expr pattern, Expr expr, std::vector<Expr> &result);
+EXPORT bool expr_match(Expr pattern, Expr expr, std::vector<Expr> &result);
 
 /** Does the first expression have the same structure as the second?
  * Variables are matched consistently. The first time a variable is
@@ -41,9 +41,9 @@ bool expr_match(Expr pattern, Expr expr, std::vector<Expr> &result);
  \endcode
  * should return true, and set result["x"] = a, and result["y"] = b.
  */
-bool expr_match(Expr pattern, Expr expr, std::map<std::string, Expr> &result);
+EXPORT bool expr_match(Expr pattern, Expr expr, std::map<std::string, Expr> &result);
 
-void expr_match_test();
+EXPORT void expr_match_test();
 
 }
 }

@@ -13,7 +13,7 @@ using std::string;
 using std::ostringstream;
 
 ostream &operator<<(ostream &out, const Type &type) {
-    switch (type.code) {
+    switch (type.code()) {
     case Type::Int:
         out << "int";
         break;
@@ -27,8 +27,8 @@ ostream &operator<<(ostream &out, const Type &type) {
         out << "handle";
         break;
     }
-    out << type.bits;
-    if (type.width > 1) out << 'x' << type.width;
+    out << type.bits();
+    if (type.lanes() > 1) out << 'x' << type.lanes();
     return out;
 }
 
@@ -73,8 +73,17 @@ ostream &operator<<(ostream &out, const DeviceAPI &api) {
     case DeviceAPI::OpenCL:
         out << "<OpenCL>";
         break;
+    case DeviceAPI::OpenGLCompute:
+        out << "<OpenGLCompute>";
+        break;
     case DeviceAPI::GLSL:
         out << "<GLSL>";
+        break;
+    case DeviceAPI::Renderscript:
+        out << "<Renderscript>";
+        break;
+    case DeviceAPI::Metal:
+        out << "<Metal>";
         break;
     }
     return out;
@@ -97,12 +106,12 @@ void IRPrinter::test() {
     Expr call = Call::make(i32, "buf", args, Call::Extern);
     Stmt store2 = Store::make("out", call + 1, x);
     Stmt for_loop2 = For::make("x", 0, y, ForType::Vectorized , DeviceAPI::Host, store2);
-    Stmt pipeline = Pipeline::make("buf", for_loop, Stmt(), for_loop2);
+    Stmt pipeline = ProducerConsumer::make("buf", for_loop, Stmt(), for_loop2);
     Stmt assertion = AssertStmt::make(y >= 3, Call::make(Int(32), "halide_error_param_too_small_i64",
-                                                         vec<Expr>(string("y"), y, 3), Call::Extern));
+                                                         {string("y"), y, 3}, Call::Extern));
     Stmt block = Block::make(assertion, pipeline);
     Stmt let_stmt = LetStmt::make("y", 17, block);
-    Stmt allocate = Allocate::make("buf", f32, vec(Expr(1023)), const_true(), let_stmt);
+    Stmt allocate = Allocate::make("buf", f32, {1023}, const_true(), let_stmt);
 
     ostringstream source;
     source << allocate;
@@ -201,11 +210,31 @@ void IRPrinter::do_indent() {
 }
 
 void IRPrinter::visit(const IntImm *op) {
-    stream << op->value;
+    if (op->type == Int(32)) {
+        stream << op->value;
+    } else {
+        stream << "(" << op->type << ")" << op->value;
+    }
+}
+
+void IRPrinter::visit(const UIntImm *op) {
+    stream << "(" << op->type << ")" << op->value;
 }
 
 void IRPrinter::visit(const FloatImm *op) {
-    stream << op->value << 'f';
+  switch (op->type.bits()) {
+    case 64:
+        stream << op->value;
+        break;
+    case 32:
+        stream << op->value << 'f';
+        break;
+    case 16:
+        stream << op->value << 'h';
+        break;
+    default:
+        internal_error << "Bad bit-width for float: " << op->type << "\n";
+    }
 }
 
 void IRPrinter::visit(const StringImm *op) {
@@ -399,29 +428,32 @@ void IRPrinter::visit(const Ramp *op) {
     print(op->base);
     stream << ", ";
     print(op->stride);
-    stream << ", " << op->width << ")";
+    stream << ", " << op->lanes << ")";
 }
 
 void IRPrinter::visit(const Broadcast *op) {
-    stream << "x" << op->width << "(";
+    stream << "x" << op->lanes << "(";
     print(op->value);
     stream << ")";
 }
 
 void IRPrinter::visit(const Call *op) {
     // Special-case some intrinsics for readability
-    if (op->call_type == Call::Intrinsic) {
-        if (op->name == Call::extract_buffer_min) {
-            print(op->args[0]);
-            stream << ".min[" << op->args[1] << "]";
-            return;
-        } else if (op->name == Call::extract_buffer_max) {
-            print(op->args[0]);
-            stream << ".max[" << op->args[1] << "]";
-            return;
-        }
+    if (op->is_intrinsic(Call::extract_buffer_host)) {
+        print(op->args[0]);
+        stream << ".host";
+        return;
+    } else if (op->is_intrinsic(Call::extract_buffer_min)) {
+        print(op->args[0]);
+        stream << ".min[" << op->args[1] << "]";
+        return;
+    } else if (op->is_intrinsic(Call::extract_buffer_max)) {
+        print(op->args[0]);
+        stream << ".max[" << op->args[1] << "]";
+        return;
     }
 
+    // TODO: Print indication of C vs C++?
     stream << op->name << "(";
     for (size_t i = 0; i < op->args.size(); i++) {
         print(op->args[i]);
@@ -458,7 +490,7 @@ void IRPrinter::visit(const AssertStmt *op) {
     stream << ")\n";
 }
 
-void IRPrinter::visit(const Pipeline *op) {
+void IRPrinter::visit(const ProducerConsumer *op) {
 
     do_indent();
     stream << "produce " << op->name << " {\n";
@@ -543,13 +575,20 @@ void IRPrinter::visit(const Allocate *op) {
         stream << " if ";
         print(op->condition);
     }
+    if (op->new_expr.defined()) {
+        stream << "\n custom_new { " << op->new_expr << " }";
+    }
+    if (!op->free_function.empty()) {
+        stream << "\n custom_delete { " << op->free_function << "(<args>); }";
+    }
     stream << "\n";
     print(op->body);
 }
 
 void IRPrinter::visit(const Free *op) {
     do_indent();
-    stream << "free " << op->name << '\n';
+    stream << "free " << op->name;
+    stream << '\n';
 }
 
 void IRPrinter::visit(const Realize *op) {

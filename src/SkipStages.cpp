@@ -18,7 +18,8 @@ using std::map;
 namespace {
 
 bool extern_call_uses_buffer(const Call *op, const std::string &func) {
-   if (op->call_type == Call::Extern) {
+  if (op->call_type == Call::Extern ||
+      op->call_type == Call::ExternCPlusPlus) {
      for (size_t i = 0; i < op->args.size(); i++) {
             const Variable *var = op->args[i].as<Variable>();
             if (var &&
@@ -100,7 +101,7 @@ private:
         visit_let(op->name, op->value, op->body);
     }
 
-    void visit(const Pipeline *op) {
+    void visit(const ProducerConsumer *op) {
         in_pipeline.push(op->name, 0);
         if (op->name != buffer) {
             op->produce.accept(this);
@@ -162,7 +163,7 @@ private:
     void visit(const Call *op) {
         // Calls inside of an address_of aren't considered, because no
         // actuall call to the Func happens.
-        if (op->call_type == Call::Intrinsic && op->name == Call::address_of) {
+        if (op->is_intrinsic(Call::address_of)) {
             // Visit the args of the inner call
             const Call *c = op->args[0].as<Call>();
             if (c) {
@@ -213,7 +214,7 @@ private:
 
     using IRMutator::visit;
 
-    void visit(const Pipeline *op) {
+    void visit(const ProducerConsumer *op) {
         // If the predicate at this stage depends on something
         // vectorized we should bail out.
         if (op->name == buffer) {
@@ -222,11 +223,11 @@ private:
                 Expr predicate_var = Variable::make(Bool(), buffer + ".needed");
                 Stmt produce = IfThenElse::make(predicate_var, op->produce);
                 Stmt update = IfThenElse::make(predicate_var, op->update);
-                stmt = Pipeline::make(op->name, produce, update, op->consume);
+                stmt = ProducerConsumer::make(op->name, produce, update, op->consume);
                 stmt = LetStmt::make(buffer + ".needed", predicate, stmt);
             } else {
                 Stmt produce = IfThenElse::make(predicate, op->produce);
-                stmt = Pipeline::make(op->name, produce, Stmt(), op->consume);
+                stmt = ProducerConsumer::make(op->name, produce, Stmt(), op->consume);
             }
 
         } else {
@@ -320,7 +321,7 @@ class MightBeSkippable : public IRVisitor {
     void visit(const Call *op) {
         // Calls inside of an address_of aren't considered, because no
         // actuall call to the Func happens.
-        if (op->call_type == Call::Intrinsic && op->name == Call::address_of) {
+        if (op->is_intrinsic(Call::address_of)) {
             // Visit the args of the inner call
             internal_assert(op->args.size() == 1);
             const Call *c = op->args[0].as<Call>();
@@ -375,7 +376,7 @@ class MightBeSkippable : public IRVisitor {
         IRVisitor::visit(op);
     }
 
-    void visit(const Pipeline *op) {
+    void visit(const ProducerConsumer *op) {
         if (op->name == func) {
             bool old_result = result;
             result = true;

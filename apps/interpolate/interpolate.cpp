@@ -2,27 +2,15 @@
 
 using namespace Halide;
 
-#include <image_io.h>
-
 #include <iostream>
 #include <limits>
 
-#include <sys/time.h>
+#include "benchmark.h"
+#include "halide_image_io.h"
+
+using namespace Halide::Tools;
 
 using std::vector;
-
-double now() {
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    static bool first_call = true;
-    static time_t first_sec = 0;
-    if (first_call) {
-        first_call = false;
-        first_sec = tv.tv_sec;
-    }
-    assert(tv.tv_sec >= first_sec);
-    return (tv.tv_sec - first_sec) + (tv.tv_usec / 1000000.0);
-}
 
 int main(int argc, char **argv) {
     if (argc < 3) {
@@ -31,6 +19,9 @@ int main(int argc, char **argv) {
     }
 
     ImageParam input(Float(32), 3);
+
+    // Input must have four color channels - rgba
+    input.set_bounds(2, 0, 4);
 
     const int levels = 10;
 
@@ -120,14 +111,28 @@ int main(int argc, char **argv) {
         Var xi, yi;
         std::cout << "Flat schedule with parallelization + vectorization." << std::endl;
         for (int l = 1; l < levels-1; ++l) {
-            if (l > 0) downsampled[l].compute_root().parallel(y).reorder(c, x, y).reorder_storage(c, x, y).vectorize(c, 4);
-            interpolated[l].compute_root().parallel(y).reorder(c, x, y).reorder_storage(c, x, y).vectorize(c, 4);
-            interpolated[l].unroll(x, 2).unroll(y, 2);
+            downsampled[l]
+                .compute_root()
+                .parallel(y, 8)
+                .vectorize(x, 4);
+            interpolated[l]
+                .compute_root()
+                .parallel(y, 8)
+                .unroll(x, 2)
+                .unroll(y, 2)
+                .vectorize(x, 8);
         }
-        final.reorder(c, x, y).bound(c, 0, 3).parallel(y);
-        final.tile(x, y, xi, yi, 2, 2).unroll(xi).unroll(yi);
-        final.bound(x, 0, input.width());
-        final.bound(y, 0, input.height());
+        final
+            .reorder(c, x, y)
+            .bound(c, 0, 3)
+            .unroll(c)
+            .tile(x, y, xi, yi, 2, 2)
+            .unroll(xi)
+            .unroll(yi)
+            .parallel(y, 8)
+            .vectorize(x, 8)
+            .bound(x, 0, input.width())
+            .bound(y, 0, input.height());
         break;
     }
     case 3:
@@ -153,22 +158,36 @@ int main(int argc, char **argv) {
         // Some gpus don't have enough memory to process the entire
         // image, so we process the image in tiles.
         Var yo, yi, xo, xi;
-        final.reorder(c, x, y).bound(c, 0, 3).vectorize(x, 4);
-        final.tile(x, y, xo, yo, xi, yi, input.width()/8, input.height()/8);
-        normalize.compute_at(final, xo).reorder(c, x, y).gpu_tile(x, y, 16, 16, DeviceAPI::Default_GPU).unroll(c);
+        final
+            .reorder(c, x, y)
+            .bound(c, 0, 3)
+            .vectorize(x, 4)
+            .tile(x, y, xo, yo, xi, yi, input.width()/4, input.height()/4);
+
+        normalize
+            .compute_at(final, xo)
+            .reorder(c, x, y)
+            .gpu_tile(x, y, 16, 16, DeviceAPI::Default_GPU)
+            .unroll(c);
 
         // Start from level 1 to save memory - level zero will be computed on demand
         for (int l = 1; l < levels; ++l) {
             int tile_size = 32 >> l;
             if (tile_size < 1) tile_size = 1;
             if (tile_size > 8) tile_size = 8;
-            downsampled[l].compute_root();
-            if (false) {
-                // Outer loop on CPU for the larger ones.
-                downsampled[l].tile(x, y, xo, yo, x, y, 256, 256);
+            downsampled[l]
+                .compute_root()
+                .gpu_tile(x, y, c, tile_size, tile_size, 4, DeviceAPI::Default_GPU);
+            if (l == 1 || l == 4) {
+                interpolated[l]
+                    .compute_at(final, xo)
+                    .gpu_tile(x, y, c, 8, 8, 4);
+            } else {
+                int parent = l > 4 ? 4 : 1;
+                interpolated[l]
+                    .compute_at(interpolated[parent], Var::gpu_blocks())
+                    .gpu_threads(x, y, c);
             }
-            downsampled[l].gpu_tile(x, y, c, tile_size, tile_size, 4, DeviceAPI::Default_GPU);
-            interpolated[l].compute_at(final, xo).gpu_tile(x, y, c, tile_size, tile_size, 4, DeviceAPI::Default_GPU);
         }
         break;
     }
@@ -179,31 +198,19 @@ int main(int argc, char **argv) {
     // JIT compile the pipeline eagerly, so we don't interfere with timing
     final.compile_jit(target);
 
-    Image<float> in_png = load<float>(argv[1]);
+    Image<float> in_png = load_image(argv[1]);
     Image<float> out(in_png.width(), in_png.height(), 3);
     assert(in_png.channels() == 4);
     input.set(in_png);
 
     std::cout << "Running... " << std::endl;
-    double min = std::numeric_limits<double>::infinity();
-    const int iters = 20;
-
-    for (int x = 0; x < iters; ++x) {
-        double before = now();
-        final.realize(out);
-        double after = now();
-        double amt = after - before;
-
-        std::cout << "   " << amt * 1000 << std::endl;
-        if (amt < min) min = amt;
-
-    }
-    std::cout << " took " << min * 1000 << " msec." << std::endl;
+    double best = benchmark(20, 1, [&]() { final.realize(out); });
+    std::cout << " took " << best * 1e3 << " msec." << std::endl;
 
     vector<Argument> args;
     args.push_back(input);
     final.compile_to_assembly("test.s", args, target);
 
-    save(out, argv[2]);
+    save_image(out, argv[2]);
 
 }

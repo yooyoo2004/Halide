@@ -51,13 +51,13 @@ namespace BoundaryConditions {
 
 namespace Internal {
 
-inline NO_INLINE void collect_bounds(std::vector<std::pair<Expr, Expr> > &collected_bounds,
+inline NO_INLINE void collect_bounds(std::vector<std::pair<Expr, Expr>> &collected_bounds,
                                      Expr min, Expr extent) {
     collected_bounds.push_back(std::make_pair(min, extent));
 }
 
 template <typename ...Bounds>
-inline NO_INLINE void collect_bounds(std::vector<std::pair<Expr, Expr> > &collected_bounds,
+inline NO_INLINE void collect_bounds(std::vector<std::pair<Expr, Expr>> &collected_bounds,
                                      Expr min, Expr extent, Bounds... bounds) {
     collected_bounds.push_back(std::make_pair(min, extent));
     collect_bounds(collected_bounds, bounds...);
@@ -85,27 +85,41 @@ inline NO_INLINE Func func_like_to_func(T func_like) {
  *
  *  (This is similar to setting GL_TEXTURE_WRAP_* to GL_CLAMP_TO_BORDER
  *   and putting value in the border of the texture.)
+ *
+ *  You may pass undefined Exprs for dimensions that you do not wish
+ *  to bound.
  */
 // @{
+EXPORT Func constant_exterior(const Func &source, Tuple value,
+                              const std::vector<std::pair<Expr, Expr>> &bounds);
 EXPORT Func constant_exterior(const Func &source, Expr value,
-                              const std::vector<std::pair<Expr, Expr> > &bounds);
+                              const std::vector<std::pair<Expr, Expr>> &bounds);
 
 template <typename T>
-inline NO_INLINE Func constant_exterior(T func_like, Expr value) {
-    std::vector<std::pair<Expr, Expr> > object_bounds;
+inline NO_INLINE Func constant_exterior(T func_like, Tuple value) {
+    std::vector<std::pair<Expr, Expr>> object_bounds;
     for (int i = 0; i < func_like.dimensions(); i++) {
         object_bounds.push_back(std::make_pair(Expr(func_like.min(i)), Expr(func_like.extent(i))));
     }
 
     return constant_exterior(Internal::func_like_to_func(func_like), value, object_bounds);
 }
+template <typename T>
+inline NO_INLINE Func constant_exterior(T func_like, Expr value) {
+    return constant_exterior(func_like, Tuple({value}));
+}
 
+template <typename T, typename ...Bounds>
+inline NO_INLINE Func constant_exterior(T func_like, Tuple value,
+                                        Bounds... bounds) {
+    std::vector<std::pair<Expr, Expr>> collected_bounds;
+    ::Halide::Internal::collect_paired_args(collected_bounds, bounds...);
+    return constant_exterior(Internal::func_like_to_func(func_like), value, collected_bounds);
+}
 template <typename T, typename ...Bounds>
 inline NO_INLINE Func constant_exterior(T func_like, Expr value,
                                         Bounds... bounds) {
-    std::vector<std::pair<Expr, Expr> > collected_bounds;
-    ::Halide::Internal::collect_paired_args(collected_bounds, bounds...);
-    return constant_exterior(Internal::func_like_to_func(func_like), value, collected_bounds);
+    return constant_exterior(func_like, Tuple({value}), bounds...);
 }
 // @}
 
@@ -117,14 +131,17 @@ inline NO_INLINE Func constant_exterior(T func_like, Expr value,
  *  min and extent methods of the passed object.
  *
  *  (This is similar to setting GL_TEXTURE_WRAP_* to GL_CLAMP_TO_EDGE.)
+ *
+ *  You may pass undefined Exprs for dimensions that you do not wish
+ *  to bound.
  */
 // @{
 EXPORT Func repeat_edge(const Func &source,
-                        const std::vector<std::pair<Expr, Expr> > &bounds);
+                        const std::vector<std::pair<Expr, Expr>> &bounds);
 
 template <typename T>
 inline NO_INLINE Func repeat_edge(T func_like) {
-    std::vector<std::pair<Expr, Expr> > object_bounds;
+    std::vector<std::pair<Expr, Expr>> object_bounds;
     for (int i = 0; i < func_like.dimensions(); i++) {
         object_bounds.push_back(std::make_pair(Expr(func_like.min(i)), Expr(func_like.extent(i))));
     }
@@ -135,7 +152,7 @@ inline NO_INLINE Func repeat_edge(T func_like) {
 
 template <typename T, typename ...Bounds>
 inline NO_INLINE Func repeat_edge(T func_like, Bounds... bounds) {
-    std::vector<std::pair<Expr, Expr> > collected_bounds;
+    std::vector<std::pair<Expr, Expr>> collected_bounds;
     ::Halide::Internal::collect_paired_args(collected_bounds, bounds...);
     return repeat_edge(Internal::func_like_to_func(func_like), collected_bounds);
 }
@@ -149,14 +166,17 @@ inline NO_INLINE Func repeat_edge(T func_like, Bounds... bounds) {
  *  min and extent methods of the passed object.
  *
  *  (This is similar to setting GL_TEXTURE_WRAP_* to GL_REPEAT.)
+ *
+ *  You may pass undefined Exprs for dimensions that you do not wish
+ *  to bound.
  */
 // @{
 EXPORT Func repeat_image(const Func &source,
-                         const std::vector<std::pair<Expr, Expr> > &bounds);
+                         const std::vector<std::pair<Expr, Expr>> &bounds);
 
 template <typename T>
 inline NO_INLINE Func repeat_image(T func_like) {
-    std::vector<std::pair<Expr, Expr> > object_bounds;
+    std::vector<std::pair<Expr, Expr>> object_bounds;
     for (int i = 0; i < func_like.dimensions(); i++) {
         object_bounds.push_back(std::make_pair(Expr(func_like.min(i)), Expr(func_like.extent(i))));
     }
@@ -166,7 +186,7 @@ inline NO_INLINE Func repeat_image(T func_like) {
 
 template <typename T, typename ...Bounds>
 inline NO_INLINE Func repeat_image(T func_like, Bounds... bounds) {
-    std::vector<std::pair<Expr, Expr> > collected_bounds;
+    std::vector<std::pair<Expr, Expr>> collected_bounds;
     ::Halide::Internal::collect_paired_args(collected_bounds, bounds...);
     return repeat_image(Internal::func_like_to_func(func_like), collected_bounds);
 }
@@ -180,14 +200,17 @@ inline NO_INLINE Func repeat_image(T func_like, Bounds... bounds) {
  *  min and extent methods of the passed object.
  *
  *  (This is similar to setting GL_TEXTURE_WRAP_* to GL_MIRRORED_REPEAT.)
+ *
+ *  You may pass undefined Exprs for dimensions that you do not wish
+ *  to bound.
  */
 // @{
 EXPORT Func mirror_image(const Func &source,
-                         const std::vector<std::pair<Expr, Expr> > &bounds);
+                         const std::vector<std::pair<Expr, Expr>> &bounds);
 
 template <typename T>
 inline NO_INLINE Func mirror_image(T func_like) {
-    std::vector<std::pair<Expr, Expr> > object_bounds;
+    std::vector<std::pair<Expr, Expr>> object_bounds;
     for (int i = 0; i < func_like.dimensions(); i++) {
         object_bounds.push_back(std::make_pair(Expr(func_like.min(i)), Expr(func_like.extent(i))));
     }
@@ -197,7 +220,7 @@ inline NO_INLINE Func mirror_image(T func_like) {
 
 template <typename T, typename ...Bounds>
 inline NO_INLINE Func mirror_image(T func_like, Bounds... bounds) {
-    std::vector<std::pair<Expr, Expr> > collected_bounds;
+    std::vector<std::pair<Expr, Expr>> collected_bounds;
     ::Halide::Internal::collect_paired_args(collected_bounds, bounds...);
     return mirror_image(Internal::func_like_to_func(func_like), collected_bounds);
 }
@@ -214,14 +237,17 @@ inline NO_INLINE Func mirror_image(T func_like, Bounds... bounds) {
  *  min and extent methods of the passed object.
  *
  *  (I do not believe there is a direct GL_TEXTURE_WRAP_* equivalent for this.)
+ *
+ *  You may pass undefined Exprs for dimensions that you do not wish
+ *  to bound.
  */
 // @{
 EXPORT Func mirror_interior(const Func &source,
-                            const std::vector<std::pair<Expr, Expr> > &bounds);
+                            const std::vector<std::pair<Expr, Expr>> &bounds);
 
 template <typename T>
 inline NO_INLINE Func mirror_interior(T func_like) {
-    std::vector<std::pair<Expr, Expr> > object_bounds;
+    std::vector<std::pair<Expr, Expr>> object_bounds;
     for (int i = 0; i < func_like.dimensions(); i++) {
         object_bounds.push_back(std::make_pair(Expr(func_like.min(i)), Expr(func_like.extent(i))));
     }
@@ -231,7 +257,7 @@ inline NO_INLINE Func mirror_interior(T func_like) {
 
 template <typename T, typename ...Bounds>
 inline NO_INLINE Func mirror_interior(T func_like, Bounds... bounds) {
-    std::vector<std::pair<Expr, Expr> > collected_bounds;
+    std::vector<std::pair<Expr, Expr>> collected_bounds;
     ::Halide::Internal::collect_paired_args(collected_bounds, bounds...);
     return mirror_interior(Internal::func_like_to_func(func_like), collected_bounds);
 }

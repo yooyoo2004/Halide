@@ -31,6 +31,7 @@ const string buffer_t_definition =
     "#endif\n"
     "#ifndef BUFFER_T_DEFINED\n"
     "#define BUFFER_T_DEFINED\n"
+    "#include <stdbool.h>\n"
     "#include <stdint.h>\n"
     "typedef struct buffer_t {\n"
     "    uint64_t dev;\n"
@@ -60,10 +61,10 @@ const string globals =
     "void halide_free(void *ctx, void *ptr);\n"
     "void *halide_print(void *ctx, const void *str);\n"
     "void *halide_error(void *ctx, const void *str);\n"
-    "int halide_debug_to_file(void *ctx, const char *filename, void *data, int, int, int, int, int, int);\n"
+    "int halide_debug_to_file(void *ctx, const char *filename, int, struct buffer_t *buf);\n"
     "int halide_start_clock(void *ctx);\n"
     "int64_t halide_current_time_ns(void *ctx);\n"
-    "uint64_t halide_profiling_timer(void *ctx);\n"
+    "void halide_profiler_pipeline_end(void *, void *);\n"
     "}\n"
     "\n"
 
@@ -116,34 +117,6 @@ const string globals =
     "inline double ceil_f64(double x) {return ceil(x);}\n"
     "inline double round_f64(double x) {return round(x);}\n"
     "\n"
-    "inline float maxval_f32() {return FLT_MAX;}\n"
-    "inline float minval_f32() {return -FLT_MAX;}\n"
-    "inline double maxval_f64() {return DBL_MAX;}\n"
-    "inline double minval_f64() {return -DBL_MAX;}\n"
-    "inline uint8_t maxval_u8() {return 0xff;}\n"
-    "inline uint8_t minval_u8() {return 0;}\n"
-    "inline uint16_t maxval_u16() {return 0xffff;}\n"
-    "inline uint16_t minval_u16() {return 0;}\n"
-    "inline uint32_t maxval_u32() {return 0xffffffff;}\n"
-    "inline uint32_t minval_u32() {return 0;}\n"
-    "inline uint64_t maxval_u64() {return 0xffffffffffffffff;}\n"
-    "inline uint64_t minval_u64() {return 0;}\n"
-    "inline int8_t maxval_s8() {return 0x7f;}\n"
-    "inline int8_t minval_s8() {return 0x80;}\n"
-    "inline int16_t maxval_s16() {return 0x7fff;}\n"
-    "inline int16_t minval_s16() {return 0x8000;}\n"
-    "inline int32_t maxval_s32() {return 0x7fffffff;}\n"
-    "inline int32_t minval_s32() {return 0x80000000;}\n"
-    "inline int64_t maxval_s64() {return 0x7fffffffffffffff;}\n"
-    "inline int64_t minval_s64() {return 0x8000000000000000;}\n"
-    "\n"
-    "inline int8_t abs_i8(int8_t a) {return a >= 0 ? a : -a;}\n"
-    "inline int16_t abs_i16(int16_t a) {return a >= 0 ? a : -a;}\n"
-    "inline int32_t abs_i32(int32_t a) {return a >= 0 ? a : -a;}\n"
-    "inline int64_t abs_i64(int64_t a) {return a >= 0 ? a : -a;}\n"
-    "inline float abs_f32(float a) {return fabsf(a);}\n"
-    "inline double abs_f64(double a) {return fabs(a);}\n"
-    "\n"
     "inline float nan_f32() {return NAN;}\n"
     "inline float neg_inf_f32() {return -INFINITY;}\n"
     "inline float inf_f32() {return INFINITY;}\n"
@@ -172,8 +145,6 @@ const string globals =
     "\n"
     "template<typename T> T max(T a, T b) {if (a > b) return a; return b;}\n"
     "template<typename T> T min(T a, T b) {if (a < b) return a; return b;}\n"
-    "template<typename T> T smod(T a, T b) {T result = a % b; if (result < 0) result += b < 0 ? -b : b; return result;}\n"
-    "template<typename T> T sdiv(T a, T b) {T q = a / b; T r = a - q*b; int bs = b >> (8*sizeof(T) - 1); int rs = r >> (8*sizeof(T) - 1); return q - (rs & bs) + (rs & ~bs);}\n"
 
     // This may look wasteful, but it's the right way to do
     // it. Compilers understand memcpy and will convert it to a no-op
@@ -202,14 +173,14 @@ const string globals =
     "}\n";
 }
 
-CodeGen_C::CodeGen_C(ostream &s, bool is_header, const std::string &guard) : IRPrinter(s), id("$$ BAD ID $$"), is_header(is_header) {
-    if (is_header) {
+CodeGen_C::CodeGen_C(ostream &s, OutputKind output_kind, const std::string &guard) : IRPrinter(s), id("$$ BAD ID $$"), output_kind(output_kind) {
+    if (is_header()) {
         // If it's a header, emit an include guard.
         stream << "#ifndef HALIDE_" << print_name(guard) << '\n'
                << "#define HALIDE_" << print_name(guard) << '\n';
     }
 
-    if (!is_header) {
+    if (!is_header()) {
         stream << headers;
     }
 
@@ -220,7 +191,7 @@ CodeGen_C::CodeGen_C(ostream &s, bool is_header, const std::string &guard) : IRP
     // (include HalideRuntime.h for the full goodness)
     stream << "struct halide_filter_metadata_t;\n";
 
-    if (!is_header) {
+    if (!is_header()) {
         stream << globals;
     }
 
@@ -230,56 +201,112 @@ CodeGen_C::CodeGen_C(ostream &s, bool is_header, const std::string &guard) : IRP
     stream << "#define HALIDE_FUNCTION_ATTRS\n";
     stream << "#endif\n";
 
-    // Everything from here on out is extern "C".
-    stream << "#ifdef __cplusplus\n";
-    stream << "extern \"C\" {\n";
-    stream << "#endif\n";
+    if (!is_c_plus_plus_interface()) {
+        // Everything from here on out is extern "C".
+        stream << "#ifdef __cplusplus\n";
+        stream << "extern \"C\" {\n";
+        stream << "#endif\n";
+    }
 }
 
 CodeGen_C::~CodeGen_C() {
-    stream << "#ifdef __cplusplus\n";
-    stream << "}  // extern \"C\"\n";
-    stream << "#endif\n";
+    if (!is_c_plus_plus_interface()) {
+        stream << "#ifdef __cplusplus\n";
+        stream << "}  // extern \"C\"\n";
+        stream << "#endif\n";
+    }
 
-    if (is_header) {
+    if (is_header()) {
         stream << "#endif\n";
     }
 }
 
 namespace {
-string type_to_c_type(Type type) {
+string type_to_c_type(Type type, bool include_space, bool c_plus_plus = true) {
+    bool needs_space = true;
     ostringstream oss;
-    user_assert(type.width == 1) << "Can't use vector types when compiling to C (yet)\n";
+    user_assert(type.lanes() == 1) << "Can't use vector types when compiling to C (yet)\n";
     if (type.is_float()) {
-        if (type.bits == 32) {
+        if (type.bits() == 32) {
             oss << "float";
-        } else if (type.bits == 64) {
+        } else if (type.bits() == 64) {
             oss << "double";
         } else {
             user_error << "Can't represent a float with this many bits in C: " << type << "\n";
         }
 
     } else if (type.is_handle()) {
-        oss << "void *";
+        needs_space = false;
+
+        // If there is no type info or is generating C (not C++) and
+        // the type is a class or in an inner scope, just use void *.
+        if (type.handle_type == NULL ||
+            (!c_plus_plus &&
+             (!type.handle_type->namespaces.empty() ||
+              !type.handle_type->enclosing_types.empty() ||
+              type.handle_type->inner_name.cpp_type_type == halide_cplusplus_type_name::Class))) {
+            oss << "const void *";
+        } else {
+            if (type.handle_type->inner_name.cpp_type_type == halide_cplusplus_type_name::Struct) {
+                oss << "struct ";
+            } else if (type.handle_type->inner_name.cpp_type_type == halide_cplusplus_type_name::Class) {
+                oss << "class ";
+            }
+            if (!type.handle_type->namespaces.empty() ||
+                !type.handle_type->enclosing_types.empty()) {
+                oss << "::";
+                for (size_t i = 0; i < type.handle_type->namespaces.size(); i++) {
+                    oss << type.handle_type->namespaces[i] << "::";
+                }
+                for (size_t i = 0; i < type.handle_type->enclosing_types.size(); i++) {
+                    oss << type.handle_type->enclosing_types[i].name << "::";
+                }
+            }
+            oss << type.handle_type->inner_name.name;
+            if (type.handle_type->reference_type == halide_handle_cplusplus_type::LValueReference) {
+                oss << " &";
+            } else if (type.handle_type->reference_type == halide_handle_cplusplus_type::LValueReference) {
+                oss << " &&";
+            }
+            for (auto modifier : type.handle_type->cpp_type_modifiers) {
+                if (modifier & halide_handle_cplusplus_type::Const) {
+                    oss << " const";
+                }
+                if (modifier & halide_handle_cplusplus_type::Volatile) {
+                    oss << " volatile";
+                }
+                if (modifier & halide_handle_cplusplus_type::Restrict) {
+                    oss << " restrict";
+                }
+                if (modifier & halide_handle_cplusplus_type::Pointer) {
+                    oss << " *";
+                } else {
+                    break;
+                }
+              
+            }
+        }
     } else {
-        switch (type.bits) {
+        switch (type.bits()) {
         case 1:
             oss << "bool";
             break;
         case 8: case 16: case 32: case 64:
             if (type.is_uint()) oss << 'u';
-            oss << "int" << type.bits << "_t";
+            oss << "int" << type.bits() << "_t";
             break;
         default:
             user_error << "Can't represent an integer with this many bits in C: " << type << "\n";
         }
     }
+    if (include_space && needs_space)
+        oss << " ";
     return oss.str();
 }
 }
 
-string CodeGen_C::print_type(Type type) {
-    return type_to_c_type(type);
+string CodeGen_C::print_type(Type type, AppendSpaceIfNeeded space_option) {
+    return type_to_c_type(type, space_option == AppendSpace);
 }
 
 string CodeGen_C::print_reinterpret(Type type, Expr e) {
@@ -314,14 +341,46 @@ class ExternCallPrototypes : public IRGraphVisitor {
     ostream &stream;
     std::set<string> &emitted;
     using IRGraphVisitor::visit;
+    // TODO: This class should likely be able to signal an error if C++
+    // code shows up and started_in_c_plus_plus isn't true, but the logic
+    // is orthogonal.
+    const bool started_in_c_plus_plus;
+    bool in_c_plus_plus;
+
+    void switch_calling_convention(bool c_plus_plus) {
+      if (in_c_plus_plus != c_plus_plus) {
+          if (in_c_plus_plus) {
+              stream << "}\n";
+          } else {
+              stream << "extern \"C\" {\n";
+          }
+          in_c_plus_plus = c_plus_plus;
+      }
+    }
 
     void visit(const Call *op) {
         IRGraphVisitor::visit(op);
 
-        if (op->call_type == Call::Extern) {
-            if (!emitted.count(op->name)) {
-                stream << type_to_c_type(op->type) << " " << op->name << "(";
-                if (function_takes_user_context(op->name)) {
+        if (op->call_type == Call::Extern ||
+            op->call_type == Call::ExternCPlusPlus) {
+            switch_calling_convention(op->call_type == Call::ExternCPlusPlus);
+            // TODO: optimize generation of namespacing to reuse namespace decls.
+            int32_t namespace_count = 0;
+            std::string name;
+            if (op->call_type == Call::ExternCPlusPlus) {
+                std::vector<std::string> namespaces;
+                name = extract_namespaces(op->name, namespaces);
+                for (auto const &ns : namespaces) {
+                    stream << "namespace " << ns << " { ";
+                }
+                namespace_count = namespaces.size();
+            } else {
+                name = op->name;
+            }
+
+            if (!emitted.count(name)) {
+                stream << type_to_c_type(op->type, true) << " " << name << "(";
+                if (function_takes_user_context(name)) {
                     stream << "void *";
                     if (op->args.size()) {
                         stream << ", ";
@@ -334,17 +393,22 @@ class ExternCallPrototypes : public IRGraphVisitor {
                     if (op->args[i].as<StringImm>()) {
                         stream << "const char *";
                     } else {
-                        stream << type_to_c_type(op->args[i].type());
+                      stream << type_to_c_type(op->args[i].type(), true);
                     }
                 }
-                stream << ");\n";
-                emitted.insert(op->name);
+                stream << ");";
+                for (int32_t i = 0; i < namespace_count; i++) {
+                    stream << " }";
+                }
+                stream << "\n";
+                emitted.insert(op->name); // Keep namespacing here.
             }
         }
     }
 
 public:
-    ExternCallPrototypes(ostream &s, std::set<string> &emitted) : stream(s), emitted(emitted) {
+  ExternCallPrototypes(ostream &s, std::set<string> &emitted, bool in_c_plus_plus)
+      : stream(s), emitted(emitted), started_in_c_plus_plus(in_c_plus_plus), in_c_plus_plus(in_c_plus_plus) {
         size_t j = 0;
         // Make sure we don't catch calls that are already in the global declarations
         for (size_t i = 0; i < globals.size(); i++) {
@@ -365,6 +429,10 @@ public:
 
         }
     }
+
+  ~ExternCallPrototypes() {
+      switch_calling_convention(started_in_c_plus_plus);
+  }
 };
 }
 
@@ -379,7 +447,7 @@ void CodeGen_C::compile(const Module &input) {
 
 void CodeGen_C::compile(const LoweredFunc &f) {
     // Don't put non-external function declarations in headers.
-    if (is_header && f.linkage != LoweredFunc::External) {
+    if (is_header() && f.linkage != LoweredFunc::External) {
         return;
     }
 
@@ -389,6 +457,35 @@ void CodeGen_C::compile(const LoweredFunc &f) {
 
     const std::vector<Argument> &args = f.args;
 
+    for (size_t i = 0; i < args.size(); i++) {
+        if (args[i].type.handle_type != NULL) {
+            if (!args[i].type.handle_type->namespaces.empty()) {
+                if (args[i].type.handle_type->inner_name.cpp_type_type != halide_cplusplus_type_name::Simple) {
+                    for (size_t ns = 0; ns < args[i].type.handle_type->namespaces.size(); ns++ ) {
+                        for (size_t indent = 0; indent < ns; indent++) {
+                           stream << "    ";
+                        }
+                        stream << indent << "namespace " << args[i].type.handle_type->namespaces[ns] << " {\n";
+                    }
+                    for (size_t indent = 0; indent < args[i].type.handle_type->namespaces.size(); indent++) {
+                        stream << "    ";
+                    }
+                    if (args[i].type.handle_type->inner_name.cpp_type_type != halide_cplusplus_type_name::Struct) {
+                        stream << "struct " << args[i].type.handle_type->inner_name.name << ";\n";
+                    } else {
+                        stream << "class " << args[i].type.handle_type->inner_name.name << ";\n";
+                    }
+                    for (size_t ns = 0; ns < args[i].type.handle_type->namespaces.size(); ns++ ) {
+                        for (size_t indent = 0; indent < ns; indent++) {
+                           stream << "    ";
+                        }
+                        stream << indent << "}\n";
+                    }
+                }
+            }
+        }           
+    }
+
     have_user_context = false;
     for (size_t i = 0; i < args.size(); i++) {
         // TODO: check that its type is void *?
@@ -396,11 +493,27 @@ void CodeGen_C::compile(const LoweredFunc &f) {
     }
 
     // Emit prototypes for any extern calls used.
-    if (!is_header) {
+    if (!is_header()) {
         stream << "\n";
-        ExternCallPrototypes e(stream, emitted);
+        ExternCallPrototypes e(stream, emitted, is_c_plus_plus_interface());
         f.body.accept(&e);
         stream << "\n";
+    }
+
+    std::vector<std::string> namespaces;
+    std::string simple_name = extract_namespaces(f.name, namespaces);
+    if (!is_c_plus_plus_interface()) {
+        user_assert(namespaces.empty()) <<
+            "Namespace qualifiers not allowed on function name if not compiling with Target::CPlusPlusNameMangling.\n";
+    }
+
+    if (!namespaces.empty()) {
+        const char *separator = "";
+        for (const auto &ns : namespaces) {
+            stream << separator << "namespace " << ns << " {";
+            separator = " ";
+        }
+        stream << "\n\n";
     }
 
     // Emit the function prototype
@@ -408,23 +521,21 @@ void CodeGen_C::compile(const LoweredFunc &f) {
         // If the function isn't public, mark it static.
         stream << "static ";
     }
-    stream << "int " << f.name << "(";
+    stream << "int " << simple_name << "(";
     for (size_t i = 0; i < args.size(); i++) {
         if (args[i].is_buffer()) {
             stream << "buffer_t *"
                    << print_name(args[i].name)
                    << "_buffer";
         } else {
-            stream << "const "
-                   << print_type(args[i].type)
-                   << " "
+            stream << print_type(args[i].type, AppendSpace)
                    << print_name(args[i].name);
         }
 
         if (i < args.size()-1) stream << ", ";
     }
 
-    if (is_header) {
+    if (is_header()) {
         stream << ") HALIDE_FUNCTION_ATTRS;\n";
     } else {
         stream << ") HALIDE_FUNCTION_ATTRS {\n";
@@ -454,19 +565,37 @@ void CodeGen_C::compile(const LoweredFunc &f) {
         }
     }
 
-    if (is_header) {
+    if (is_header()) {
         // If this is a header and we are here, we know this is an externally visible Func, so
         // declare the argv function.
-        stream << "int " << f.name << "_argv(void **args) HALIDE_FUNCTION_ATTRS;\n";
+        stream << "int " << simple_name << "_argv(void **args) HALIDE_FUNCTION_ATTRS;\n";
+    }
 
+    // Close namespaces here as metadata must be outside them
+    if (!namespaces.empty()) {
+        stream << "\n";
+        for (size_t i = 0; i < namespaces.size(); i++) {
+            stream << "}";
+        }
+        stream << " // Close namespaces ";
+        const char *separator = "";
+        for (const auto &ns : namespaces) {
+            stream << separator << ns;
+            separator = "::";
+        }
+
+        stream << "\n\n";
+    }
+
+    if (is_header()) {
         // And also the metadata.
-       stream << "extern const halide_filter_metadata_t " << f.name << "_metadata;\n";
+       stream << "extern const struct halide_filter_metadata_t " << simple_name << "_metadata;\n";
     }
 }
 
 void CodeGen_C::compile(const Buffer &buffer) {
     // Don't define buffers in headers.
-    if (is_header) {
+    if (is_header()) {
         return;
     }
 
@@ -517,7 +646,9 @@ void CodeGen_C::push_buffer(Type t, const std::string &buffer_name) {
            << " *)("
            << buf_name
            << "->host);\n";
-    allocations.push(buffer_name, t);
+    Allocation alloc;
+    alloc.type = t;
+    allocations.push(buffer_name, alloc);
     do_indent();
     stream << "(void)" << name << ";\n";
 
@@ -525,7 +656,7 @@ void CodeGen_C::push_buffer(Type t, const std::string &buffer_name) {
     stream << "const bool "
            << name
            << "_host_and_dev_are_null = ("
-           << buf_name << "->host == NULL) && ("
+           << buf_name << "->host == nullptr) && ("
            << buf_name << "->dev == 0);\n";
     do_indent();
     stream << "(void)" << name << "_host_and_dev_are_null;\n";
@@ -592,9 +723,7 @@ string CodeGen_C::print_assignment(Type t, const std::string &rhs) {
     if (cached == cache.end()) {
         id = unique_name('_');
         do_indent();
-        stream << print_type(t)
-               << " " << id
-               << " = " << rhs << ";\n";
+        stream << print_type(t, AppendSpace) << id << " = " << rhs << ";\n";
         cache[rhs] = id;
     } else {
         id = cached->second;
@@ -648,12 +777,23 @@ void CodeGen_C::visit(const Mul *op) {
 
 void CodeGen_C::visit(const Div *op) {
     int bits;
-    if (is_const_power_of_two(op->b, &bits)) {
+    if (is_const_power_of_two_integer(op->b, &bits)) {
         ostringstream oss;
         oss << print_expr(op->a) << " >> " << bits;
         print_assignment(op->type, oss.str());
     } else if (op->type.is_int()) {
-        print_expr(Call::make(op->type, "sdiv", vec(op->a, op->b), Call::Extern));
+        string a = print_expr(op->a);
+        string b = print_expr(op->b);
+        // q = a / b
+        string q = print_assignment(op->type, a + " / " + b);
+        // r = a - q * b
+        string r = print_assignment(op->type, a + " - " + q + " * " + b);
+        // bs = b >> (8*sizeof(T) - 1)
+        string bs = print_assignment(op->type, b + " >> (" + print_type(op->type.element_of()) + ")" + std::to_string(op->type.bits() - 1));
+        // rs = r >> (8*sizeof(T) - 1)
+        string rs = print_assignment(op->type, r + " >> (" + print_type(op->type.element_of()) + ")" + std::to_string(op->type.bits() - 1));
+        // id = q - (rs & bs) + (rs & bs)
+        print_assignment(op->type, q + " - (" + rs + " & " + bs + ") + (" + rs + " & ~" + bs + ")");
     } else {
         visit_binop(op->type, op->a, op->b, "/");
     }
@@ -661,23 +801,32 @@ void CodeGen_C::visit(const Div *op) {
 
 void CodeGen_C::visit(const Mod *op) {
     int bits;
-    if (is_const_power_of_two(op->b, &bits)) {
+    if (is_const_power_of_two_integer(op->b, &bits)) {
         ostringstream oss;
         oss << print_expr(op->a) << " & " << ((1 << bits)-1);
         print_assignment(op->type, oss.str());
     } else if (op->type.is_int()) {
-        print_expr(Call::make(op->type, "smod", vec(op->a, op->b), Call::Extern));
+        string a = print_expr(op->a);
+        string b = print_expr(op->b);
+        // r = a % b
+        string r = print_assignment(op->type, a + " % " + b);
+        // rs = r >> (8*sizeof(T) - 1)
+        string rs = print_assignment(op->type, r + " >> (" + print_type(op->type.element_of()) + ")" + std::to_string(op->type.bits() - 1));
+        // abs_b = abs(b)
+        string abs_b = print_expr(cast(op->type, abs(op->b)));
+        // id = r + (abs_b & rs)
+        print_assignment(op->type, r + " + (" + abs_b + " & " + rs + ")");
     } else {
         visit_binop(op->type, op->a, op->b, "%");
     }
 }
 
 void CodeGen_C::visit(const Max *op) {
-    print_expr(Call::make(op->type, "max", vec(op->a, op->b), Call::Extern));
+    print_expr(Call::make(op->type, "max", {op->a, op->b}, Call::Extern));
 }
 
 void CodeGen_C::visit(const Min *op) {
-    print_expr(Call::make(op->type, "min", vec(op->a, op->b), Call::Extern));
+    print_expr(Call::make(op->type, "min", {op->a, op->b}, Call::Extern));
 }
 
 void CodeGen_C::visit(const EQ *op) {
@@ -717,9 +866,15 @@ void CodeGen_C::visit(const Not *op) {
 }
 
 void CodeGen_C::visit(const IntImm *op) {
-    ostringstream oss;
-    oss << op->value;
-    id = oss.str();
+    if (op->type == Int(32)) {
+        id = std::to_string(op->value);
+    } else {
+        print_assignment(op->type, "(" + print_type(op->type) + ")(" + std::to_string(op->value) + ")");
+    }
+}
+
+void CodeGen_C::visit(const UIntImm *op) {
+    print_assignment(op->type, "(" + print_type(op->type) + ")(" + std::to_string(op->value) + ")");
 }
 
 void CodeGen_C::visit(const StringImm *op) {
@@ -767,292 +922,317 @@ void CodeGen_C::visit(const FloatImm *op) {
 
 void CodeGen_C::visit(const Call *op) {
 
-    internal_assert((op->call_type == Call::Extern || op->call_type == Call::Intrinsic))
+    internal_assert(op->call_type == Call::Extern ||
+                    op->call_type == Call::ExternCPlusPlus ||
+                    op->call_type == Call::PureExtern ||
+                    op->call_type == Call::Intrinsic ||
+                    op->call_type == Call::PureIntrinsic)
         << "Can only codegen extern calls and intrinsics\n";
 
     ostringstream rhs;
 
     // Handle intrinsics first
-    if (op->call_type == Call::Intrinsic) {
-        if (op->name == Call::debug_to_file) {
-            internal_assert(op->args.size() == 9);
-            const StringImm *string_imm = op->args[0].as<StringImm>();
-            internal_assert(string_imm);
-            string filename = string_imm->value;
-            const Load *load = op->args[1].as<Load>();
-            internal_assert(load);
-            string func = print_name(load->name);
+    if (op->is_intrinsic(Call::debug_to_file)) {
+        internal_assert(op->args.size() == 3);
+        const StringImm *string_imm = op->args[0].as<StringImm>();
+        internal_assert(string_imm);
+        string filename = string_imm->value;
+        string typecode = print_expr(op->args[1]);
+        string buffer = print_name(print_expr(op->args[2]));
 
-            vector<string> args(6);
-            for (size_t i = 0; i < args.size(); i++) {
-                args[i] = print_expr(op->args[i+3]);
-            }
-
-            rhs << "halide_debug_to_file(";
-            rhs << (have_user_context ? "__user_context_" : "NULL");
-            rhs << ", \"" + filename + "\", " + func;
-            for (size_t i = 0; i < args.size(); i++) {
-                rhs << ", " << args[i];
-            }
-            rhs << ")";
-        } else if (op->name == Call::bitwise_and) {
-            internal_assert(op->args.size() == 2);
-            string a0 = print_expr(op->args[0]);
-            string a1 = print_expr(op->args[1]);
-            rhs << a0 << " & " << a1;
-        } else if (op->name == Call::bitwise_xor) {
-            internal_assert(op->args.size() == 2);
-            string a0 = print_expr(op->args[0]);
-            string a1 = print_expr(op->args[1]);
-            rhs << a0 << " ^ " << a1;
-        } else if (op->name == Call::bitwise_or) {
-            internal_assert(op->args.size() == 2);
-            string a0 = print_expr(op->args[0]);
-            string a1 = print_expr(op->args[1]);
-            rhs << a0 << " | " << a1;
-        } else if (op->name == Call::bitwise_not) {
-            internal_assert(op->args.size() == 1);
-            rhs << "~" << print_expr(op->args[0]);
-        } else if (op->name == Call::reinterpret) {
-            internal_assert(op->args.size() == 1);
-            rhs << print_reinterpret(op->type, op->args[0]);
-        } else if (op->name == Call::shift_left) {
-            internal_assert(op->args.size() == 2);
-            string a0 = print_expr(op->args[0]);
-            string a1 = print_expr(op->args[1]);
-            rhs << a0 << " << " << a1;
-        } else if (op->name == Call::shift_right) {
-            internal_assert(op->args.size() == 2);
-            string a0 = print_expr(op->args[0]);
-            string a1 = print_expr(op->args[1]);
-            rhs << a0 << " >> " << a1;
-        } else if (op->name == Call::rewrite_buffer) {
-            int dims = ((int)(op->args.size())-2)/3;
-            (void)dims; // In case internal_assert is ifdef'd to do nothing
-            internal_assert((int)(op->args.size()) == dims*3 + 2);
-            internal_assert(dims <= 4);
-            vector<string> args(op->args.size());
-            const Variable *v = op->args[0].as<Variable>();
-            internal_assert(v);
-            args[0] = print_name(v->name);
-            for (size_t i = 1; i < op->args.size(); i++) {
-                args[i] = print_expr(op->args[i]);
-            }
-            rhs << "halide_rewrite_buffer(";
-            for (size_t i = 0; i < 14; i++) {
-                if (i > 0) rhs << ", ";
-                if (i < args.size()) {
-                    rhs << args[i];
-                } else {
-                    rhs << '0';
-                }
-            }
-            rhs << ")";
-        } else if (op->name == Call::profiling_timer) {
-            internal_assert(op->args.size() == 1);
-            rhs << "halide_profiling_timer(";
-            rhs << (have_user_context ? "__user_context_" : "NULL");
-            rhs << ")";
-        } else if (op->name == Call::lerp) {
-            internal_assert(op->args.size() == 3);
-            Expr e = lower_lerp(op->args[0], op->args[1], op->args[2]);
-            rhs << print_expr(e);
-        } else if (op->name == Call::absd) {
-            internal_assert(op->args.size() == 2);
-            Expr a = op->args[0];
-            Expr b = op->args[1];
-            Expr e = select(a < b, b - a, a - b);
-            rhs << print_expr(e);
-        } else if (op->name == Call::null_handle) {
-            rhs << "NULL";
-        } else if (op->name == Call::address_of) {
-            const Load *l = op->args[0].as<Load>();
-            internal_assert(op->args.size() == 1 && l);
-            rhs << "(("
-                << print_type(l->type)
-                << " *)"
-                << print_name(l->name)
-                << " + "
-                << print_expr(l->index)
-                << ")";
-        } else if (op->name == Call::return_second) {
-            internal_assert(op->args.size() == 2);
-            string arg0 = print_expr(op->args[0]);
-            string arg1 = print_expr(op->args[1]);
-            rhs << "(" << arg0 << ", " << arg1 << ")";
-        } else if (op->name == Call::if_then_else) {
-            internal_assert(op->args.size() == 3);
-
-            string result_id = unique_name('_');
-
-            do_indent();
-            stream << print_type(op->args[1].type())
-                   << " " << result_id << ";\n";
-
-            string cond_id = print_expr(op->args[0]);
-
-            do_indent();
-            stream << "if (" << cond_id << ")\n";
-            open_scope();
-            string true_case = print_expr(op->args[1]);
-            do_indent();
-            stream << result_id << " = " << true_case << ";\n";
-            close_scope("if " + cond_id);
-            do_indent();
-            stream << "else\n";
-            open_scope();
-            string false_case = print_expr(op->args[2]);
-            do_indent();
-            stream << result_id << " = " << false_case << ";\n";
-            close_scope("if " + cond_id + " else");
-
-            rhs << result_id;
-        } else if (op->name == Call::copy_buffer_t) {
-            internal_assert(op->args.size() == 1);
-            string arg = print_expr(op->args[0]);
-            string buf_id = unique_name('B');
-            stream << "buffer_t " << buf_id << " = *((buffer_t *)(" << arg << "))\n";
-            rhs << "(&" << buf_id << ")";
-        } else if (op->name == Call::create_buffer_t) {
-            internal_assert(op->args.size() >= 2);
-            vector<string> args;
-            for (size_t i = 0; i < op->args.size(); i++) {
-                args.push_back(print_expr(op->args[i]));
-            }
-            string buf_id = unique_name('B');
-            do_indent();
-            stream << "buffer_t " << buf_id << " = {0};\n";
-            do_indent();
-            stream << buf_id << ".host = (uint8_t *)(" << args[0] << ");\n";
-            do_indent();
-            stream << buf_id << ".elem_size = " << args[1] << ";\n";
-            int dims = ((int)op->args.size() - 2)/3;
-            for (int i = 0; i < dims; i++) {
-                do_indent();
-                stream << buf_id << ".min[" << i << "] = " << args[i*3+2] << ";\n";
-                do_indent();
-                stream << buf_id << ".extent[" << i << "] = " << args[i*3+3] << ";\n";
-                do_indent();
-                stream << buf_id << ".stride[" << i << "] = " << args[i*3+4] << ";\n";
-            }
-            rhs << "(&" + buf_id + ")";
-        } else if (op->name == Call::extract_buffer_max) {
-            internal_assert(op->args.size() == 2);
-            string a0 = print_expr(op->args[0]);
-            string a1 = print_expr(op->args[1]);
-            rhs << "(((buffer_t *)(" << a0 << "))->min[" << a1 << "] + " <<
-                "((buffer_t *)(" << a0 << "))->extent[" << a1 << "] - 1)";
-        } else if (op->name == Call::extract_buffer_min) {
-            internal_assert(op->args.size() == 2);
-            string a0 = print_expr(op->args[0]);
-            string a1 = print_expr(op->args[1]);
-            rhs << "((buffer_t *)(" << a0 << "))->min[" << a1 << "]";
-        } else if (op->name == Call::set_host_dirty) {
-            internal_assert(op->args.size() == 2);
-            string a0 = print_expr(op->args[0]);
-            string a1 = print_expr(op->args[1]);
-            do_indent();
-            stream << "((buffer_t *)(" << a0 << "))->host_dirty = " << a1 << ";\n";
-            rhs << "0";
-        } else if (op->name == Call::set_dev_dirty) {
-            internal_assert(op->args.size() == 2);
-            string a0 = print_expr(op->args[0]);
-            string a1 = print_expr(op->args[1]);
-            do_indent();
-            stream << "((buffer_t *)(" << a0 << "))->dev_dirty = " << a1 << ";\n";
-            rhs << "0";
-        } else if (op->name == Call::abs) {
-            internal_assert(op->args.size() == 1);
-            string arg = print_expr(op->args[0]);
-            rhs << "(" << arg << " > 0 ? " << arg << " : -" << arg << ")";
-        } else if (op->name == Call::memoize_expr) {
-            internal_assert(op->args.size() >= 1);
-            string arg = print_expr(op->args[0]);
-            rhs << "(" << arg << ")";
-        } else if (op->name == Call::copy_memory) {
-            internal_assert(op->args.size() == 3);
-            string dest = print_expr(op->args[0]);
-            string src = print_expr(op->args[1]);
-            string size = print_expr(op->args[2]);
-            rhs << "memcpy(" << dest << ", " << src << ", " << size << ")";
-        } else if (op->name == Call::make_struct) {
-            // Emit a line something like:
-            // struct {const int f_0, const char f_1, const int f_2} foo = {3, 'c', 4};
-
-            // Get the args
-            vector<string> values;
-            for (size_t i = 0; i < op->args.size(); i++) {
-                values.push_back(print_expr(op->args[i]));
-            }
-            do_indent();
-            stream << "struct {";
-            // List the types.
-            for (size_t i = 0; i < op->args.size(); i++) {
-                stream << "const " << print_type(op->args[i].type()) << " f_" << i << "; ";
-            }
-            string struct_name = unique_name('s');
-            stream << "}  " << struct_name << " = {";
-            // List the values.
-            for (size_t i = 0; i < op->args.size(); i++) {
-                if (i > 0) stream << ", ";
-                stream << values[i];
-            }
-            stream << "};\n";
-            // Return a pointer to it.
-            rhs << "(&" << struct_name << ")";
-        } else if (op->name == Call::stringify) {
-            // Rewrite to an snprintf
-            vector<string> printf_args;
-            string format_string = "";
-            for (size_t i = 0; i < op->args.size(); i++) {
-                Type t = op->args[i].type();
-                printf_args.push_back(print_expr(op->args[i]));
-                if (t.is_int()) {
-                    format_string += "%lld";
-                    printf_args[i] = "(long long)(" + printf_args[i] + ")";
-                } else if (t.is_uint()) {
-                    format_string += "%llu";
-                    printf_args[i] = "(long long unsigned)(" + printf_args[i] + ")";
-                } else if (t.is_float()) {
-                    if (t.bits == 32) {
-                        format_string += "%f";
-                    } else {
-                        format_string += "%e";
-                    }
-                } else if (op->args[i].as<StringImm>()) {
-                    format_string += "%s";
-                } else {
-                    internal_assert(t.is_handle());
-                    format_string += "%p";
-                }
-
-            }
-            string buf_name = unique_name('b');
-            do_indent();
-            stream << "char " << buf_name << "[1024];\n";
-            do_indent();
-            stream << "snprintf(" << buf_name << ", 1024, \"" << format_string << "\"";
-            for (size_t i = 0; i < printf_args.size(); i++) {
-                stream << ", " << printf_args[i];
-            }
-            stream << ");\n";
-            rhs << buf_name;
-
-        } else {
-            // TODO: other intrinsics
-            internal_error << "Unhandled intrinsic in C backend: " << op->name << '\n';
+        rhs << "halide_debug_to_file(";
+        rhs << (have_user_context ? "__user_context_" : "nullptr");
+        rhs << ", \"" + filename + "\", " + typecode;
+        rhs << ", (struct buffer_t *)" << buffer;
+        rhs << ")";
+    } else if (op->is_intrinsic(Call::bitwise_and)) {
+        internal_assert(op->args.size() == 2);
+        string a0 = print_expr(op->args[0]);
+        string a1 = print_expr(op->args[1]);
+        rhs << a0 << " & " << a1;
+    } else if (op->is_intrinsic(Call::bitwise_xor)) {
+        internal_assert(op->args.size() == 2);
+        string a0 = print_expr(op->args[0]);
+        string a1 = print_expr(op->args[1]);
+        rhs << a0 << " ^ " << a1;
+    } else if (op->is_intrinsic(Call::bitwise_or)) {
+        internal_assert(op->args.size() == 2);
+        string a0 = print_expr(op->args[0]);
+        string a1 = print_expr(op->args[1]);
+        rhs << a0 << " | " << a1;
+    } else if (op->is_intrinsic(Call::bitwise_not)) {
+        internal_assert(op->args.size() == 1);
+        rhs << "~" << print_expr(op->args[0]);
+    } else if (op->is_intrinsic(Call::reinterpret)) {
+        internal_assert(op->args.size() == 1);
+        rhs << print_reinterpret(op->type, op->args[0]);
+    } else if (op->is_intrinsic(Call::shift_left)) {
+        internal_assert(op->args.size() == 2);
+        string a0 = print_expr(op->args[0]);
+        string a1 = print_expr(op->args[1]);
+        rhs << a0 << " << " << a1;
+    } else if (op->is_intrinsic(Call::shift_right)) {
+        internal_assert(op->args.size() == 2);
+        string a0 = print_expr(op->args[0]);
+        string a1 = print_expr(op->args[1]);
+        rhs << a0 << " >> " << a1;
+    } else if (op->is_intrinsic(Call::rewrite_buffer)) {
+        int dims = ((int)(op->args.size())-2)/3;
+        (void)dims; // In case internal_assert is ifdef'd to do nothing
+        internal_assert((int)(op->args.size()) == dims*3 + 2);
+        internal_assert(dims <= 4);
+        vector<string> args(op->args.size());
+        const Variable *v = op->args[0].as<Variable>();
+        internal_assert(v);
+        args[0] = print_name(v->name);
+        for (size_t i = 1; i < op->args.size(); i++) {
+            args[i] = print_expr(op->args[i]);
         }
+        rhs << "halide_rewrite_buffer(";
+        for (size_t i = 0; i < 14; i++) {
+            if (i > 0) rhs << ", ";
+            if (i < args.size()) {
+                rhs << args[i];
+            } else {
+                rhs << '0';
+            }
+        }
+        rhs << ")";
+    } else if (op->is_intrinsic(Call::lerp)) {
+        internal_assert(op->args.size() == 3);
+        Expr e = lower_lerp(op->args[0], op->args[1], op->args[2]);
+        rhs << print_expr(e);
+    } else if (op->is_intrinsic(Call::absd)) {
+        internal_assert(op->args.size() == 2);
+        Expr a = op->args[0];
+        Expr b = op->args[1];
+        Expr e = select(a < b, b - a, a - b);
+        rhs << print_expr(e);
+    } else if (op->is_intrinsic(Call::null_handle)) {
+        rhs << "nullptr";
+    } else if (op->is_intrinsic(Call::address_of)) {
+        const Load *l = op->args[0].as<Load>();
+        internal_assert(op->args.size() == 1 && l);
+        rhs << "(("
+            << print_type(l->type.element_of()) // index is in elements, not vectors.
+            << " *)"
+            << print_name(l->name)
+            << " + "
+            << print_expr(l->index)
+            << ")";
+    } else if (op->is_intrinsic(Call::return_second)) {
+        internal_assert(op->args.size() == 2);
+        string arg0 = print_expr(op->args[0]);
+        string arg1 = print_expr(op->args[1]);
+        rhs << "(" << arg0 << ", " << arg1 << ")";
+    } else if (op->is_intrinsic(Call::if_then_else)) {
+        internal_assert(op->args.size() == 3);
+
+        string result_id = unique_name('_');
+
+        do_indent();
+        stream << print_type(op->args[1].type(), AppendSpace)
+               << result_id << ";\n";
+
+        string cond_id = print_expr(op->args[0]);
+
+        do_indent();
+        stream << "if (" << cond_id << ")\n";
+        open_scope();
+        string true_case = print_expr(op->args[1]);
+        do_indent();
+        stream << result_id << " = " << true_case << ";\n";
+        close_scope("if " + cond_id);
+        do_indent();
+        stream << "else\n";
+        open_scope();
+        string false_case = print_expr(op->args[2]);
+        do_indent();
+        stream << result_id << " = " << false_case << ";\n";
+        close_scope("if " + cond_id + " else");
+
+        rhs << result_id;
+    } else if (op->is_intrinsic(Call::copy_buffer_t)) {
+        internal_assert(op->args.size() == 1);
+        string arg = print_expr(op->args[0]);
+        string buf_id = unique_name('B');
+        stream << "buffer_t " << buf_id << " = *((buffer_t *)(" << arg << "))\n";
+        rhs << "(&" << buf_id << ")";
+    } else if (op->is_intrinsic(Call::create_buffer_t)) {
+        internal_assert(op->args.size() >= 2);
+        vector<string> args;
+        args.push_back(print_expr(op->args[0]));
+        args.push_back(print_expr(op->args[1].type().bytes()));
+        for (size_t i = 2; i < op->args.size(); i++) {
+            args.push_back(print_expr(op->args[i]));
+        }
+        string buf_id = unique_name('B');
+        do_indent();
+        stream << "buffer_t " << buf_id << " = {0};\n";
+        do_indent();
+        stream << buf_id << ".host = const_cast<uint8_t *>((const uint8_t *)(" << args[0] << "));\n";
+        do_indent();
+        stream << buf_id << ".elem_size = " << args[1] << ";\n";
+        int dims = ((int)op->args.size() - 2)/3;
+        for (int i = 0; i < dims; i++) {
+            do_indent();
+            stream << buf_id << ".min[" << i << "] = " << args[i*3+2] << ";\n";
+            do_indent();
+            stream << buf_id << ".extent[" << i << "] = " << args[i*3+3] << ";\n";
+            do_indent();
+            stream << buf_id << ".stride[" << i << "] = " << args[i*3+4] << ";\n";
+        }
+        rhs << "(&" + buf_id + ")";
+    } else if (op->is_intrinsic(Call::extract_buffer_max)) {
+        internal_assert(op->args.size() == 2);
+        string a0 = print_expr(op->args[0]);
+        string a1 = print_expr(op->args[1]);
+        rhs << "(((buffer_t *)(" << a0 << "))->min[" << a1 << "] + " <<
+            "((buffer_t *)(" << a0 << "))->extent[" << a1 << "] - 1)";
+    } else if (op->is_intrinsic(Call::extract_buffer_min)) {
+        internal_assert(op->args.size() == 2);
+        string a0 = print_expr(op->args[0]);
+        string a1 = print_expr(op->args[1]);
+        rhs << "((buffer_t *)(" << a0 << "))->min[" << a1 << "]";
+    } else if (op->is_intrinsic(Call::extract_buffer_host)) {
+        internal_assert(op->args.size() == 1);
+        string a0 = print_expr(op->args[0]);
+        rhs << "((buffer_t *)(" << a0 << "))->host";
+    } else if (op->is_intrinsic(Call::set_host_dirty)) {
+        internal_assert(op->args.size() == 2);
+        string a0 = print_expr(op->args[0]);
+        string a1 = print_expr(op->args[1]);
+        do_indent();
+        stream << "((buffer_t *)(" << a0 << "))->host_dirty = " << a1 << ";\n";
+        rhs << "0";
+    } else if (op->is_intrinsic(Call::set_dev_dirty)) {
+        internal_assert(op->args.size() == 2);
+        string a0 = print_expr(op->args[0]);
+        string a1 = print_expr(op->args[1]);
+        do_indent();
+        stream << "((buffer_t *)(" << a0 << "))->dev_dirty = " << a1 << ";\n";
+        rhs << "0";
+    } else if (op->is_intrinsic(Call::abs)) {
+        internal_assert(op->args.size() == 1);
+        Expr a0 = op->args[0];
+        rhs << print_expr(cast(op->type, select(a0 > 0, a0, -a0)));
+    } else if (op->is_intrinsic(Call::memoize_expr)) {
+        internal_assert(op->args.size() >= 1);
+        string arg = print_expr(op->args[0]);
+        rhs << "(" << arg << ")";
+    } else if (op->is_intrinsic(Call::copy_memory)) {
+        internal_assert(op->args.size() == 3);
+        string dest = print_expr(op->args[0]);
+        string src = print_expr(op->args[1]);
+        string size = print_expr(op->args[2]);
+        rhs << "memcpy(" << dest << ", " << src << ", " << size << ")";
+    } else if (op->is_intrinsic(Call::make_struct)) {
+        // Emit a line something like:
+        // struct {const int f_0, const char f_1, const int f_2} foo = {3, 'c', 4};
+
+        // Get the args
+        vector<string> values;
+        for (size_t i = 0; i < op->args.size(); i++) {
+            values.push_back(print_expr(op->args[i]));
+        }
+        do_indent();
+        stream << "struct {";
+        // List the types.
+        for (size_t i = 0; i < op->args.size(); i++) {
+            stream << "const " << print_type(op->args[i].type()) << " f_" << i << "; ";
+        }
+        string struct_name = unique_name('s');
+        stream << "}  " << struct_name << " = {";
+        // List the values.
+        for (size_t i = 0; i < op->args.size(); i++) {
+            if (i > 0) stream << ", ";
+            stream << values[i];
+        }
+        stream << "};\n";
+        // Return a pointer to it.
+        rhs << "(&" << struct_name << ")";
+    } else if (op->is_intrinsic(Call::stringify)) {
+        // Rewrite to an snprintf
+        vector<string> printf_args;
+        string format_string = "";
+        for (size_t i = 0; i < op->args.size(); i++) {
+            Type t = op->args[i].type();
+            printf_args.push_back(print_expr(op->args[i]));
+            if (t.is_int()) {
+                format_string += "%lld";
+                printf_args[i] = "(long long)(" + printf_args[i] + ")";
+            } else if (t.is_uint()) {
+                format_string += "%llu";
+                printf_args[i] = "(long long unsigned)(" + printf_args[i] + ")";
+            } else if (t.is_float()) {
+                if (t.bits() == 32) {
+                    format_string += "%f";
+                } else {
+                    format_string += "%e";
+                }
+            } else if (op->args[i].as<StringImm>()) {
+                format_string += "%s";
+            } else {
+                internal_assert(t.is_handle());
+                format_string += "%p";
+            }
+
+        }
+        string buf_name = unique_name('b');
+        do_indent();
+        stream << "char " << buf_name << "[1024];\n";
+        do_indent();
+        stream << "snprintf(" << buf_name << ", 1024, \"" << format_string << "\"";
+        for (size_t i = 0; i < printf_args.size(); i++) {
+            stream << ", " << printf_args[i];
+        }
+        stream << ");\n";
+        rhs << buf_name;
+
+    } else if (op->is_intrinsic(Call::register_destructor)) {
+        internal_assert(op->args.size() == 2);
+        const StringImm *fn = op->args[0].as<StringImm>();
+        internal_assert(fn);
+        string arg = print_expr(op->args[1]);
+
+        string call =
+            fn->value + "(" +
+            (have_user_context ? "__user_context_, " : "nullptr, ")
+            + "arg);";
+
+        do_indent();
+        // Make a struct on the stack that calls the given function as a destructor
+        string struct_name = unique_name('s');
+        string instance_name = unique_name('d');
+        stream << "struct " << struct_name << "{ "
+               << "void *arg; "
+               << struct_name << "(void *a) : arg((void *)a) {} "
+               << "~" << struct_name << "() {" << call << "}"
+               << "} " << instance_name << "(" << arg << ");\n";
+        rhs << print_expr(0);
+    } else if (op->call_type == Call::Intrinsic ||
+               op->call_type == Call::PureIntrinsic) {
+        // TODO: other intrinsics
+        internal_error << "Unhandled intrinsic in C backend: " << op->name << '\n';
 
     } else {
+        std::string name;
+        if (op->call_type == Call::ExternCPlusPlus) {
+            std::vector<std::string> namespaces;
+            name = extract_namespaces(op->name, namespaces);
+        } else {
+            name = op->name;
+        }
+
         // Generic calls
         vector<string> args(op->args.size());
         for (size_t i = 0; i < op->args.size(); i++) {
             args[i] = print_expr(op->args[i]);
         }
-        rhs << op->name << "(";
+        rhs << name << "(";
 
         if (function_takes_user_context(op->name)) {
-            rhs << (have_user_context ? "__user_context_, " : "NULL, ");
+            rhs << (have_user_context ? "__user_context_, " : "nullptr, ");
         }
 
         for (size_t i = 0; i < op->args.size(); i++) {
@@ -1066,8 +1246,12 @@ void CodeGen_C::visit(const Call *op) {
 }
 
 void CodeGen_C::visit(const Load *op) {
-    bool type_cast_needed = !(allocations.contains(op->name) &&
-                              allocations.get(op->name) == op->type);
+
+    Type t = op->type;
+    bool type_cast_needed =
+        !allocations.contains(op->name) ||
+        allocations.get(op->name).type != t;
+
     ostringstream rhs;
     if (type_cast_needed) {
         rhs << "(("
@@ -1089,15 +1273,17 @@ void CodeGen_C::visit(const Store *op) {
 
     Type t = op->value.type();
 
-    bool type_cast_needed = !(allocations.contains(op->name) &&
-                              allocations.get(op->name) == t);
+    bool type_cast_needed =
+        t.is_handle() ||
+        !allocations.contains(op->name) ||
+        allocations.get(op->name).type != t;
 
     string id_index = print_expr(op->index);
     string id_value = print_expr(op->value);
     do_indent();
 
     if (type_cast_needed) {
-        stream << "(("
+        stream << "((const "
                << print_type(t)
                << " *)"
                << print_name(op->name)
@@ -1158,7 +1344,7 @@ void CodeGen_C::visit(const AssertStmt *op) {
     close_scope("");
 }
 
-void CodeGen_C::visit(const Pipeline *op) {
+void CodeGen_C::visit(const ProducerConsumer *op) {
 
     do_indent();
     stream << "// produce " << op->name << '\n';
@@ -1216,81 +1402,93 @@ void CodeGen_C::visit(const Allocate *op) {
     bool on_stack = false;
     int32_t constant_size;
     string size_id;
-    if (constant_allocation_size(op->extents, op->name, constant_size)) {
-        int64_t stack_bytes = constant_size * op->type.bytes();
-
-        if (stack_bytes > ((int64_t(1) << 31) - 1)) {
-            user_error << "Total size for allocation "
-                       << op->name << " is constant but exceeds 2^31 - 1.\n";
-        } else {
-            size_id = print_expr(Expr(static_cast<int32_t>(constant_size)));
-            if (stack_bytes <= 1024 * 8) {
-                on_stack = true;
-            }
-        }
-    } else {
-        // Check that the allocation is not scalar (if it were scalar
-        // it would have constant size).
-        internal_assert(op->extents.size() > 0);
-
-        size_id = print_assignment(Int(64), print_expr(op->extents[0]));
-
-        for (size_t i = 1; i < op->extents.size(); i++) {
-            // Make the code a little less cluttered for two-dimensional case
-            string new_size_id_rhs;
-            string next_extent = print_expr(op->extents[i]);
-            if (i > 1) {
-                new_size_id_rhs =  "(" + size_id + " > ((int64_t(1) << 31) - 1)) ? " + size_id + " : (" + size_id + " * " + next_extent + ")";
-            } else {
-                new_size_id_rhs = size_id + " * " + next_extent;
-            }
-            size_id = print_assignment(Int(64), new_size_id_rhs);
-        }
-        do_indent();
-        stream << "if ((" << size_id << " > ((int64_t(1) << 31) - 1)) || ((" << size_id <<
-          " * sizeof(" << print_type(op->type) << ")) > ((int64_t(1) << 31) - 1)))\n";
-        open_scope();
-        do_indent();
-        stream << "halide_error("
-               << (have_user_context ? "__user_context_" : "NULL")
-               << ", \"32-bit signed overflow computing size of allocation "
-               << op->name << "\\n\");\n";
-        do_indent();
-        stream << "return -1;\n";
-        close_scope("overflow test " + op->name);
-    }
-
-    // Check the condition to see if this allocation should actually be created.
-    // If the allocation is on the stack, the only condition we can respect is
-    // unconditional false (otherwise a non-constant-sized array declaration
-    // will be generated).
-    if (!on_stack || is_zero(op->condition)) {
-        Expr conditional_size = Select::make(op->condition,
-                                             Var(size_id),
-                                             Expr(static_cast<int32_t>(0)));
-        conditional_size = simplify(conditional_size);
-        size_id = print_assignment(Int(64), print_expr(conditional_size));
-    }
-
-    allocations.push(op->name, op->type);
-
-    do_indent();
-    stream << print_type(op->type) << ' ';
-
-    if (on_stack) {
-        stream << print_name(op->name)
-               << "[" << size_id << "];\n";
-    } else {
-        stream << "*"
-               << print_name(op->name)
-               << " = ("
-               << print_type(op->type)
-               << " *)halide_malloc("
-               << (have_user_context ? "__user_context_" : "NULL")
-               << ", sizeof("
-               << print_type(op->type)
-               << ")*" << size_id << ");\n";
+    if (op->new_expr.defined()) {
+        Allocation alloc;
+        alloc.type = op->type;
+        alloc.free_function = op->free_function;
+        allocations.push(op->name, alloc);
         heap_allocations.push(op->name, 0);
+        stream << print_type(op->type) << "*" << print_name(op->name) << " = (" << print_expr(op->new_expr) << ");\n";
+    } else {
+        constant_size = op->constant_allocation_size();
+        if (constant_size > 0) {
+            int64_t stack_bytes = constant_size * op->type.bytes();
+
+            if (stack_bytes > ((int64_t(1) << 31) - 1)) {
+                user_error << "Total size for allocation "
+                           << op->name << " is constant but exceeds 2^31 - 1.\n";
+            } else {
+                size_id = print_expr(Expr(static_cast<int32_t>(constant_size)));
+                if (can_allocation_fit_on_stack(stack_bytes)) {
+                    on_stack = true;
+                }
+            }
+        } else {
+            // Check that the allocation is not scalar (if it were scalar
+            // it would have constant size).
+            internal_assert(op->extents.size() > 0);
+
+            size_id = print_assignment(Int(64), print_expr(op->extents[0]));
+
+            for (size_t i = 1; i < op->extents.size(); i++) {
+                // Make the code a little less cluttered for two-dimensional case
+                string new_size_id_rhs;
+                string next_extent = print_expr(op->extents[i]);
+                if (i > 1) {
+                    new_size_id_rhs =  "(" + size_id + " > ((int64_t(1) << 31) - 1)) ? " + size_id + " : (" + size_id + " * " + next_extent + ")";
+                } else {
+                    new_size_id_rhs = size_id + " * " + next_extent;
+                }
+                size_id = print_assignment(Int(64), new_size_id_rhs);
+            }
+            do_indent();
+            stream << "if ((" << size_id << " > ((int64_t(1) << 31) - 1)) || ((" << size_id <<
+              " * sizeof(" << print_type(op->type) << ")) > ((int64_t(1) << 31) - 1)))\n";
+            open_scope();
+            do_indent();
+            stream << "halide_error("
+                   << (have_user_context ? "__user_context_" : "nullptr")
+                   << ", \"32-bit signed overflow computing size of allocation "
+                   << op->name << "\\n\");\n";
+            do_indent();
+            stream << "return -1;\n";
+            close_scope("overflow test " + op->name);
+        }
+
+        // Check the condition to see if this allocation should actually be created.
+        // If the allocation is on the stack, the only condition we can respect is
+        // unconditional false (otherwise a non-constant-sized array declaration
+        // will be generated).
+        if (!on_stack || is_zero(op->condition)) {
+            Expr conditional_size = Select::make(op->condition,
+                                                 Var(size_id),
+                                                 Expr(static_cast<int32_t>(0)));
+            conditional_size = simplify(conditional_size);
+            size_id = print_assignment(Int(64), print_expr(conditional_size));
+        }
+
+        Allocation alloc;
+        alloc.type = op->type;
+        allocations.push(op->name, alloc);
+
+        do_indent();
+        stream << print_type(op->type) << ' ';
+
+        if (on_stack) {
+            stream << print_name(op->name)
+                   << "[" << size_id << "];\n";
+        } else {
+            stream << "*"
+                   << print_name(op->name)
+                   << " = ("
+                   << print_type(op->type)
+                   << " *)halide_malloc("
+                   << (have_user_context ? "__user_context_" : "nullptr")
+                   << ", sizeof("
+                   << print_type(op->type)
+                   << ")*" << size_id << ");\n";
+            heap_allocations.push(op->name, 0);
+        }
     }
 
     op->body.accept(this);
@@ -1303,9 +1501,14 @@ void CodeGen_C::visit(const Allocate *op) {
 
 void CodeGen_C::visit(const Free *op) {
     if (heap_allocations.contains(op->name)) {
+        string free_function = allocations.get(op->name).free_function;
+        if (free_function.empty()) {
+            free_function = "halide_free";
+        }
+
         do_indent();
-        stream << "halide_free("
-               << (have_user_context ? "__user_context_, " : "NULL, ")
+        stream << free_function << "("
+               << (have_user_context ? "__user_context_, " : "nullptr, ")
                << print_name(op->name)
                << ");\n";
         heap_allocations.pop(op->name);
@@ -1336,11 +1539,8 @@ void CodeGen_C::visit(const IfThenElse *op) {
 }
 
 void CodeGen_C::visit(const Evaluate *op) {
+    if (is_const(op->value)) return;
     string id = print_expr(op->value);
-    if (id == "0") {
-        // Skip evaluate(0) nodes. They're how we represent no-ops.
-        return;
-    }
     do_indent();
     stream << "(void)" << id << ";\n";
 }
@@ -1362,16 +1562,16 @@ void CodeGen_C::test() {
     Stmt s = Store::make("buf", e, x);
     s = LetStmt::make("x", beta+1, s);
     s = Block::make(s, Free::make("tmp.stack"));
-    s = Allocate::make("tmp.stack", Int(32), vec(Expr(127)), const_true(), s);
+    s = Allocate::make("tmp.stack", Int(32), {127}, const_true(), s);
     s = Block::make(s, Free::make("tmp.heap"));
-    s = Allocate::make("tmp.heap", Int(32), vec(Expr(43), Expr(beta)), const_true(), s);
+    s = Allocate::make("tmp.heap", Int(32), {43, beta}, const_true(), s);
 
     Module m("", get_host_target());
     m.append(LoweredFunc("test1", args, s, LoweredFunc::External));
 
     ostringstream source;
     {
-        CodeGen_C cg(source, false);
+        CodeGen_C cg(source, CodeGen_C::CImplementation);
         cg.compile(m);
     }
 
@@ -1388,10 +1588,10 @@ void CodeGen_C::test() {
         "extern \"C\" {\n"
         "#endif\n"
         "\n\n"
-        "int test1(buffer_t *_buf_buffer, const float _alpha, const int32_t _beta, const void * __user_context) HALIDE_FUNCTION_ATTRS {\n"
+        "int test1(buffer_t *_buf_buffer, float _alpha, int32_t _beta, const void *__user_context) HALIDE_FUNCTION_ATTRS {\n"
         " int32_t *_buf = (int32_t *)(_buf_buffer->host);\n"
         " (void)_buf;\n"
-        " const bool _buf_host_and_dev_are_null = (_buf_buffer->host == NULL) && (_buf_buffer->dev == 0);\n"
+        " const bool _buf_host_and_dev_are_null = (_buf_buffer->host == nullptr) && (_buf_buffer->dev == 0);\n"
         " (void)_buf_host_and_dev_are_null;\n"
         " const int32_t _buf_min_0 = _buf_buffer->min[0];\n"
         " (void)_buf_min_0;\n"
@@ -1438,7 +1638,7 @@ void CodeGen_C::test() {
         "   {\n"
         "    char b0[1024];\n"
         "    snprintf(b0, 1024, \"%lld%s\", (long long)(3), \"\\n\");\n"
-        "    void * _6 = b0;\n"
+        "    char const *_6 = b0;\n"
         "    int32_t _7 = halide_print(__user_context_, _6);\n"
         "    int32_t _8 = (_7, 3);\n"
         "    _4 = _8;\n"

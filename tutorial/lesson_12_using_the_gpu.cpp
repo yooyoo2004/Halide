@@ -1,26 +1,28 @@
-// Halide tutorial lesson 12.
+// Halide tutorial lesson 12: Using the GPU
 
-// This lesson demonstrates how to use Halide to run code on a GPU.
-
-// This lesson can be built by invoking the command:
-//    make tutorial_lesson_12_using_the_gpu
-// in a shell with the current directory at the top of the halide source tree.
-// Otherwise, see the platform-specific compiler invocations below.
+// This lesson demonstrates how to use Halide to run code on a GPU using OpenCL.
 
 // On linux, you can compile and run it like so:
-// g++ lesson_12*.cpp -g -std=c++11 -I ../include -L ../bin -lHalide `libpng-config --cflags --ldflags` -lpthread -ldl -o lesson_12
+// g++ lesson_12*.cpp -g -std=c++11 -I ../include -I ../tools -L ../bin -lHalide `libpng-config --cflags --ldflags` -lpthread -ldl -o lesson_12
 // LD_LIBRARY_PATH=../bin ./lesson_12
 
 // On os x:
-// g++ lesson_12*.cpp -g -std=c++11 -I ../include -L ../bin -lHalide `libpng-config --cflags --ldflags` -o lesson_12
+// g++ lesson_12*.cpp -g -std=c++11 -I ../include -I ../tools -L ../bin -lHalide `libpng-config --cflags --ldflags` -o lesson_12
 // DYLD_LIBRARY_PATH=../bin ./lesson_12
+
+// If you have the entire Halide source tree, you can also build it by
+// running:
+//    make tutorial_lesson_12_using_the_gpu
+// in a shell with the current directory at the top of the halide
+// source tree.
 
 #include "Halide.h"
 #include <stdio.h>
 using namespace Halide;
 
 // Include some support code for loading pngs.
-#include "image_io.h"
+#include "halide_image_io.h"
+using namespace Halide::Tools;
 
 // Include a clock to do performance testing.
 #include "clock.h"
@@ -31,12 +33,12 @@ Var x, y, c, i;
 // We're going to want to schedule a pipeline in several ways, so we
 // define the pipeline in a class so that we can recreate it several
 // times with different schedules.
-class Pipeline {
+class MyPipeline {
 public:
     Func lut, padded, padded16, sharpen, curved;
     Image<uint8_t> input;
 
-    Pipeline(Image<uint8_t> in) : input(in) {
+    MyPipeline(Image<uint8_t> in) : input(in) {
         // For this lesson, we'll use a two-stage pipeline that sharpens
         // and then applies a look-up-table (LUT).
 
@@ -80,18 +82,15 @@ public:
         curved.split(y, yo, yi, 16)
               .parallel(yo);
 
-        // Compute sharpen as needed per scanline of curved, reusing
-        // previous values computed within the same strip of 16
-        // scanlines.
-        sharpen.store_at(curved, yo)
-               .compute_at(curved, yi);
+        // Compute sharpen as needed per scanline of curved.
+        sharpen.compute_at(curved, yi);
 
         // Vectorize the sharpen. It's 16-bit so we'll vectorize it 8-wide.
         sharpen.vectorize(x, 8);
 
-        // Compute the padded input at the same granularity as the
-        // sharpen. We'll leave the cast to 16-bit inlined into
-        // sharpen.
+        // Compute the padded input as needed per scanline of curved,
+        // reusing previous values computed within the same strip of
+        // 16 scanlines.
         padded.store_at(curved, yo)
               .compute_at(curved, yi);
 
@@ -197,7 +196,7 @@ public:
     }
 
     void test_performance() {
-        // Test the performance of the scheduled Pipeline.
+        // Test the performance of the scheduled MyPipeline.
 
         // If we realize curved into a Halide::Image, that will
         // unfairly penalize GPU performance by including a GPU->CPU
@@ -237,7 +236,8 @@ public:
     }
 
     void test_correctness(Image<uint8_t> reference_output) {
-        Image<uint8_t> output = curved.realize(input.width(), input.height(), input.channels());
+        Image<uint8_t> output =
+            curved.realize(input.width(), input.height(), input.channels());
 
         // Check against the reference output.
         for (int c = 0; c < input.channels(); c++) {
@@ -262,25 +262,26 @@ bool have_opencl();
 
 int main(int argc, char **argv) {
     // Load an input image.
-    Image<uint8_t> input = load<uint8_t>("images/rgb.png");
+    Image<uint8_t> input = load_image("images/rgb.png");
 
     // Allocated an image that will store the correct output
     Image<uint8_t> reference_output(input.width(), input.height(), input.channels());
 
     printf("Testing performance on CPU:\n");
-    Pipeline p1(input);
+    MyPipeline p1(input);
     p1.schedule_for_cpu();
     p1.test_performance();
     p1.curved.realize(reference_output);
 
     if (have_opencl()) {
         printf("Testing performance on GPU:\n");
-        Pipeline p2(input);
+        MyPipeline p2(input);
         p2.schedule_for_gpu();
         p2.test_performance();
         p2.test_correctness(reference_output);
     } else {
-        printf("Not testing performance on GPU, because I can't find the opencl library\n");
+        printf("Not testing performance on GPU, "
+               "because I can't find the opencl library\n");
     }
 
     return 0;

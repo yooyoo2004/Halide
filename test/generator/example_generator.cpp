@@ -72,14 +72,14 @@ public:
     // 1.0 so that invocations that don't set it explicitly use a predictable value.
     Param<float> runtime_factor{ "runtime_factor", 1.0 };
 
-    Func build() override {
+    Func build() {
         Var x, y, c;
         Func f("f"), g("g");
 
         f(x, y) = max(x, y);
         g(x, y, c) = cast(output_type, f(x, y) * c * compiletime_factor * runtime_factor);
 
-        g.bound(c, 0, channels).reorder(c, x, y).unroll(c);
+        g.bound(c, 0, (int)channels).reorder(c, x, y).unroll(c);
 
         // Note that we can use the Generator method natural_vector_size()
         // here; this produces the width of the SIMD vector being targeted

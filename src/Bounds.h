@@ -25,7 +25,9 @@ typedef std::map<std::pair<std::string, int>, Interval> FuncValueBounds;
  * maximum possible value)), compute two expressions that give the
  * minimum possible value and the maximum possible value of this
  * expression. Max or min may be undefined expressions if the value is
- * not bounded above or below.
+ * not bounded above or below. If the expression is a vector, also
+ * takes the bounds across the vector lanes and returns a scalar
+ * result.
  *
  * This is for tasks such as deducing the region of a buffer
  * loaded by a chunk of code.
@@ -129,7 +131,7 @@ Box box_touched(Stmt s, std::string fn,
 FuncValueBounds compute_function_value_bounds(const std::vector<std::string> &order,
                                               const std::map<std::string, Function> &env);
 
-void bounds_test();
+EXPORT void bounds_test();
 
 }
 }

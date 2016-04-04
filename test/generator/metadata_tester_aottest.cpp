@@ -8,7 +8,9 @@
 
 #include "metadata_tester.h"
 #include "metadata_tester_ucon.h"
-#include "static_image.h"
+#include "halide_image.h"
+
+using namespace Halide::Tools;
 
 const int kSize = 32;
 
@@ -235,7 +237,9 @@ const halide_scalar_value_t *make_scalar(void *v) {
 void check_metadata(const halide_filter_metadata_t &md, bool expect_ucon_at_0) {
     // target will vary depending on where we are testing, but probably
     // will contain "x86" or "arm".
-    if (!strstr(md.target, "x86") && !strstr(md.target, "arm")) {
+    if (!strstr(md.target, "x86") &&
+        !strstr(md.target, "powerpc") &&
+        !strstr(md.target, "arm")) {
         fprintf(stderr, "Expected x86 or arm, Actual %s\n", md.target);
         exit(-1);
     }
@@ -248,9 +252,9 @@ void check_metadata(const halide_filter_metadata_t &md, bool expect_ucon_at_0) {
           0,
           halide_type_handle,
           64,
-          NULL,
-          NULL,
-          NULL,
+          nullptr,
+          nullptr,
+          nullptr,
         },
         {
           "input",
@@ -258,9 +262,9 @@ void check_metadata(const halide_filter_metadata_t &md, bool expect_ucon_at_0) {
           3,
           halide_type_uint,
           8,
-          NULL,
-          NULL,
-          NULL,
+          nullptr,
+          nullptr,
+          nullptr,
         },
         {
           "b",
@@ -269,8 +273,8 @@ void check_metadata(const halide_filter_metadata_t &md, bool expect_ucon_at_0) {
           halide_type_uint,
           1,
           make_scalar<bool>(true),
-          NULL,
-          NULL,
+          nullptr,
+          nullptr,
         },
         {
           "i8",
@@ -378,9 +382,9 @@ void check_metadata(const halide_filter_metadata_t &md, bool expect_ucon_at_0) {
           0,
           halide_type_handle,
           64,
-          NULL,
-          NULL,
-          NULL,
+          nullptr,
+          nullptr,
+          nullptr,
         },
         {
           "output.0",
@@ -388,9 +392,9 @@ void check_metadata(const halide_filter_metadata_t &md, bool expect_ucon_at_0) {
           3,
           halide_type_float,
           32,
-          NULL,
-          NULL,
-          NULL,
+          nullptr,
+          nullptr,
+          nullptr,
         },
         {
           "output.1",
@@ -398,9 +402,9 @@ void check_metadata(const halide_filter_metadata_t &md, bool expect_ucon_at_0) {
           3,
           halide_type_float,
           32,
-          NULL,
-          NULL,
-          NULL,
+          nullptr,
+          nullptr,
+          nullptr,
         }
     };
     const int kExpectedArgumentCount = (int)sizeof(kExpectedArguments) / sizeof(kExpectedArguments[0]);
@@ -429,7 +433,7 @@ int EnumerateFunc(void* enumerate_context,
 }
 
 int main(int argc, char **argv) {
-    void* user_context = NULL;
+    void* user_context = nullptr;
 
     int result;
 
@@ -445,10 +449,10 @@ int main(int argc, char **argv) {
     Image<float> output0(kSize, kSize, 3);
     Image<float> output1(kSize, kSize, 3);
 
-    result = metadata_tester(input, false, 0, 0, 0, 0, 0, 0, 0, 0, 0.f, 0.0, NULL, output0, output1);
+    result = metadata_tester(input, false, 0, 0, 0, 0, 0, 0, 0, 0, 0.f, 0.0, nullptr, output0, output1);
     EXPECT_EQ(0, result);
 
-    result = metadata_tester_ucon(user_context, input, false, 0, 0, 0, 0, 0, 0, 0, 0, 0.f, 0.0, NULL, output0, output1);
+    result = metadata_tester_ucon(user_context, input, false, 0, 0, 0, 0, 0, 0, 0, 0, 0.f, 0.0, nullptr, output0, output1);
     EXPECT_EQ(0, result);
 
     verify(input, output0, output1);

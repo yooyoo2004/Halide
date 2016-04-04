@@ -33,7 +33,7 @@ public:
      * subexpressions, it's worth passing in a cache to use.
      * Currently this is only done in common-subexpression
      * elimination. */
-    IRComparer(IRCompareCache *c = NULL) : result(Equal), cache(c) {}
+    IRComparer(IRCompareCache *c = nullptr) : result(Equal), cache(c) {}
 
 private:
     Expr expr;
@@ -49,6 +49,7 @@ private:
     CmpResult compare_scalar(T a, T b);
 
     void visit(const IntImm *);
+    void visit(const UIntImm *);
     void visit(const FloatImm *);
     void visit(const StringImm *);
     void visit(const Cast *);
@@ -77,7 +78,7 @@ private:
     void visit(const Let *);
     void visit(const LetStmt *);
     void visit(const AssertStmt *);
-    void visit(const Pipeline *);
+    void visit(const ProducerConsumer *);
     void visit(const For *);
     void visit(const Store *);
     void visit(const Provide *);
@@ -195,9 +196,9 @@ IRComparer::CmpResult IRComparer::compare_stmt(const Stmt &a, const Stmt &b) {
 IRComparer::CmpResult IRComparer::compare_types(Type a, Type b) {
     if (result != Equal) return result;
 
-    compare_scalar(a.code, b.code);
-    compare_scalar(a.bits, b.bits);
-    compare_scalar(a.width, b.width);
+    compare_scalar(a.code(), b.code());
+    compare_scalar(a.bits(), b.bits());
+    compare_scalar(a.lanes(), b.lanes());
 
     return result;
 }
@@ -229,6 +230,11 @@ IRComparer::CmpResult IRComparer::compare_expr_vector(const vector<Expr> &a, con
 
 void IRComparer::visit(const IntImm *op) {
     const IntImm *e = expr.as<IntImm>();
+    compare_scalar(e->value, op->value);
+}
+
+void IRComparer::visit(const UIntImm *op) {
+    const UIntImm *e = expr.as<UIntImm>();
     compare_scalar(e->value, op->value);
 }
 
@@ -339,8 +345,8 @@ void IRComparer::visit(const AssertStmt *op) {
     compare_expr(s->message, op->message);
 }
 
-void IRComparer::visit(const Pipeline *op) {
-    const Pipeline *s = stmt.as<Pipeline>();
+void IRComparer::visit(const ProducerConsumer *op) {
+    const ProducerConsumer *s = stmt.as<ProducerConsumer>();
 
     compare_names(s->name, op->name);
     compare_stmt(s->produce, op->produce);
@@ -382,6 +388,8 @@ void IRComparer::visit(const Allocate *op) {
     compare_expr_vector(s->extents, op->extents);
     compare_stmt(s->body, op->body);
     compare_expr(s->condition, op->condition);
+    compare_expr(s->new_expr, op->new_expr);
+    compare_names(s->free_function, op->free_function);
 }
 
 void IRComparer::visit(const Realize *op) {

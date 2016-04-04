@@ -17,7 +17,7 @@ int main(int argc, char **argv) {
         Expr r = dx * dx + dy * dy;
         Expr mask = r < 200 * 200;
         initial(x, y, c) = random_float();// * select(mask, 1.0f, 0.001f);
-        initial.compile_to_file("reaction_diffusion_2_init", cx, cy);
+        initial.compile_to_file("reaction_diffusion_2_init", {cx, cy});
     }
 
     // Then the function that updates the state. Also depends on user input.
@@ -105,6 +105,7 @@ int main(int argc, char **argv) {
 
         new_state.vectorize(x, 4);
         blur.vectorize(x, 4);
+        state.set_bounds(2, 0, 3);
 
         std::vector<Argument> args(6);
         args[0] = state;
@@ -141,7 +142,7 @@ int main(int argc, char **argv) {
         Var yi;
         render.split(y, y, yi, 64).parallel(y);
 
-        render.compile_to_file("reaction_diffusion_2_render", state);
+        render.compile_to_file("reaction_diffusion_2_render", {state});
     }
 
     return 0;

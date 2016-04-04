@@ -38,7 +38,7 @@ EXPORT void deregister_heap_object(const void *obj, size_t size);
  */
 template<typename T>
 const void *get_introspection_helper() {
-    static T *introspection_helper = NULL;
+    static T *introspection_helper = nullptr;
     return &introspection_helper;
 }
 
@@ -67,7 +67,7 @@ namespace Internal {
 static bool check_introspection(const void *var, const std::string &type,
                                 const std::string &correct_name,
                                 const std::string &correct_file, int line) {
-    std::string correct_loc = correct_file + ":" + int_to_string(line);
+    std::string correct_loc = correct_file + ":" + std::to_string(line);
     std::string loc = Introspection::get_source_location();
     std::string name = Introspection::get_variable_name(var, type);
     return name == correct_name && loc == correct_loc;

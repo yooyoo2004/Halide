@@ -139,14 +139,22 @@ private:
 
     void visit(const IntImm *op){
         stream << open_span("IntImm Imm");
-        stream << op->value;
+        stream << Expr(op);
         stream << close_span();
     }
+
+    void visit(const UIntImm *op){
+        stream << open_span("UIntImm Imm");
+        stream << Expr(op);
+        stream << close_span();
+    }
+
     void visit(const FloatImm *op){
         stream << open_span("FloatImm Imm");
-        stream << op->value << 'f';
+        stream << Expr(op);
         stream << close_span();
     }
+
     void visit(const StringImm *op){
         stream << open_span("StringImm");
         stream << '"';
@@ -227,12 +235,12 @@ private:
 
     void visit(const Min *op) {
         stream << open_span("Min");
-        print_list(symbol("min") + "(", vec(op->a, op->b), ")");
+        print_list(symbol("min") + "(", {op->a, op->b}, ")");
         stream << close_span();
     }
     void visit(const Max *op) {
         stream << open_span("Max");
-        print_list(symbol("max") + "(", vec(op->a, op->b), ")");
+        print_list(symbol("max") + "(", {op->a, op->b}, ")");
         stream << close_span();
     }
     void visit(const Not *op) {
@@ -243,7 +251,7 @@ private:
     }
     void visit(const Select *op) {
         stream << open_span("Select");
-        print_list(symbol("select") + "(", vec(op->condition, op->true_value, op->false_value), ")");
+        print_list(symbol("select") + "(", {op->condition, op->true_value, op->false_value}, ")");
         stream << close_span();
     }
     void visit(const Load *op) {
@@ -257,13 +265,13 @@ private:
     }
     void visit(const Ramp *op) {
         stream << open_span("Ramp");
-        print_list(symbol("ramp") + "(", vec(op->base, op->stride, Expr(op->width)), ")");
+        print_list(symbol("ramp") + "(", {op->base, op->stride, Expr(op->lanes)}, ")");
         stream << close_span();
     }
     void visit(const Broadcast *op) {
         stream << open_span("Broadcast");
         stream << open_span("Matched");
-        stream << symbol("x") << op->width << "(";
+        stream << symbol("x") << op->lanes << "(";
         stream << close_span();
         print(op->value);
         stream << matched(")");
@@ -271,26 +279,30 @@ private:
     }
     void visit(const Call *op) {
         stream << open_span("Call");
-        if (op->call_type == Call::Intrinsic) {
-            if (op->name == Call::extract_buffer_min) {
-                stream << open_span("Matched");
-                print(op->args[0]);
-                stream << ".min[";
-                stream << close_span();
-                print(op->args[1]);
-                stream << matched("]");
-                stream << close_span();
-                return;
-            } else if (op->name == Call::extract_buffer_max) {
-                stream << open_span("Matched");
-                print(op->args[0]);
-                stream << ".max[";
-                stream << close_span();
-                print(op->args[1]);
-                stream << matched("]");
-                stream << close_span();
-                return;
-            }
+        if (op->is_intrinsic(Call::extract_buffer_host)) {
+            stream << open_span("Matched");
+            print(op->args[0]);
+            stream << ".host";
+            stream << close_span();
+            return;
+        } else if (op->is_intrinsic(Call::extract_buffer_min)) {
+            stream << open_span("Matched");
+            print(op->args[0]);
+            stream << ".min[";
+            stream << close_span();
+            print(op->args[1]);
+            stream << matched("]");
+            stream << close_span();
+            return;
+        } else if (op->is_intrinsic(Call::extract_buffer_max)) {
+            stream << open_span("Matched");
+            print(op->args[0]);
+            stream << ".max[";
+            stream << close_span();
+            print(op->args[1]);
+            stream << matched("]");
+            stream << close_span();
+            return;
         }
         print_list(symbol(op->name) + "(", op->args, ")");
         stream << close_span();
@@ -333,7 +345,7 @@ private:
         print_list(symbol("assert") + "(", args, ")");
         stream << close_div();
     }
-    void visit(const Pipeline *op) {
+    void visit(const ProducerConsumer *op) {
         scope.push(op->name, unique_id());
         stream << open_div("Produce");
         int produce_id = unique_id();
@@ -387,7 +399,7 @@ private:
         }
         stream << " (";
         stream << close_span();
-        print_list(vec(Variable::make(Int(32), op->name), op->min, op->extent));
+        print_list({Variable::make(Int(32), op->name), op->min, op->extent});
         stream << matched(")");
         stream << close_expand_button();
         stream << " " << matched("{");
@@ -448,6 +460,17 @@ private:
             stream << " " << keyword("if") << " ";
             print(op->condition);
         }
+        if (op->new_expr.defined()) {
+            stream << open_span("Matched");
+            stream << keyword("custom_new") << "{";
+            print(op->new_expr);
+            stream << matched("}");
+        }
+        if (!op->free_function.empty()) {
+            stream << open_span("Matched");
+            stream << keyword("custom_delete") << "{ " << op->free_function << "(); ";
+            stream << matched("}");
+        }
 
         stream << open_div("AllocateBody");
         print(op->body);
@@ -471,7 +494,7 @@ private:
         stream << var(op->name);
         stream << matched("(");
         for (size_t i = 0; i < op->bounds.size(); i++) {
-            print_list("[", vec(op->bounds[i].min, op->bounds[i].extent), "]");
+            print_list("[", {op->bounds[i].min, op->bounds[i].extent}, "]");
             if (i < op->bounds.size() - 1) stream << ", ";
         }
         stream << matched(")");
@@ -489,10 +512,20 @@ private:
         stream << close_div();
         scope.pop(op->name);
     }
+
+    // To avoid generating ridiculously deep DOMs, we flatten blocks here.
+    void visit_block_stmt(Stmt stmt) {
+        if (const Block *b = stmt.as<Block>()) {
+            visit_block_stmt(b->first);
+            visit_block_stmt(b->rest);
+        } else if (stmt.defined()) {
+            print(stmt);
+        }
+    }
     void visit(const Block *op) {
         stream << open_div("Block");
-        print(op->first);
-        if (op->rest.defined()) print(op->rest);
+        visit_block_stmt(op->first);
+        visit_block_stmt(op->rest);
         stream << close_div();
     }
     void visit(const IfThenElse *op) {

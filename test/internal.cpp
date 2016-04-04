@@ -2,10 +2,10 @@
 #include "IRPrinter.h"
 #include "CodeGen_X86.h"
 #include "CodeGen_C.h"
+#include "CPlusPlusMangle.h"
 #include "Func.h"
 #include "Simplify.h"
 #include "Bounds.h"
-#include "Lower.h"
 #include "IRMatch.h"
 #include "Deinterleave.h"
 #include "ModulusRemainder.h"
@@ -22,8 +22,6 @@ int main(int argc, const char **argv) {
     CodeGen_C::test();
     ir_equality_test();
     bounds_test();
-    lower_test();
-    Func::test();
     expr_match_test();
     deinterleave_vector_test();
     modulus_remainder_test();
@@ -31,6 +29,8 @@ int main(int argc, const char **argv) {
     cse_test();
     simplify_test();
     solve_test();
+    target_test();
+    cplusplus_mangle_test();
 
     return 0;
 }

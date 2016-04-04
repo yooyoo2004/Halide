@@ -1,4 +1,5 @@
 #include "HalideRuntime.h"
+#include "printer.h"
 
 #define INLINE inline __attribute__((always_inline))
 
@@ -139,7 +140,7 @@ INLINE const T* get_data(const mxArray *a) { return (const T *)mxGetData(a); }
 // Search for a symbol in the calling process (i.e. matlab).
 template <typename T>
 INLINE T get_mex_symbol(void *user_context, const char *name, bool required) {
-    T s = (T)get_symbol(name);
+    T s = (T)halide_get_symbol(name);
     if (required && s == NULL) {
         error(user_context) << "mex API not found: " << name << "\n";
         return NULL;
@@ -288,6 +289,7 @@ WEAK int halide_matlab_array_to_buffer_t(void *user_context,
     }
 
     buf->host = (uint8_t *)mxGetData(arr);
+    buf->host_dirty = true;
     buf->elem_size = mxGetElementSize(arr);
 
     for (int i = 0; i < dim_count && i < expected_dims; i++) {
@@ -433,6 +435,22 @@ WEAK int halide_matlab_call_pipeline(void *user_context,
     }
 
     result = pipeline(args);
+
+    // Copy any GPU resident output buffers back to the CPU before returning.
+    for (int i = 0; i < nrhs; i++) {
+        const halide_filter_argument_t *arg_metadata = &metadata->arguments[i];
+
+        if (arg_metadata->kind == halide_argument_kind_output_buffer) {
+            buffer_t *buf = (buffer_t *)args[i];
+            halide_copy_to_host(user_context, buf);
+        }
+        if (arg_metadata->kind == halide_argument_kind_input_buffer ||
+            arg_metadata->kind == halide_argument_kind_output_buffer) {
+            buffer_t *buf = (buffer_t *)args[i];
+            halide_device_free(user_context, buf);
+        }
+    }
+
     return result;
 }
 

@@ -9,6 +9,9 @@ IRVisitor::~IRVisitor() {
 void IRVisitor::visit(const IntImm *) {
 }
 
+void IRVisitor::visit(const UIntImm *) {
+}
+
 void IRVisitor::visit(const FloatImm *) {
 }
 
@@ -152,7 +155,7 @@ void IRVisitor::visit(const AssertStmt *op) {
     op->message.accept(this);
 }
 
-void IRVisitor::visit(const Pipeline *op) {
+void IRVisitor::visit(const ProducerConsumer *op) {
     op->produce.accept(this);
     if (op->update.defined()) op->update.accept(this);
     op->consume.accept(this);
@@ -183,6 +186,9 @@ void IRVisitor::visit(const Allocate *op) {
       op->extents[i].accept(this);
     }
     op->condition.accept(this);
+    if (op->new_expr.defined()) {
+        op->new_expr.accept(this);
+    }
     op->body.accept(this);
 }
 
@@ -238,6 +244,9 @@ void IRGraphVisitor::include(const Stmt &s) {
 }
 
 void IRGraphVisitor::visit(const IntImm *) {
+}
+
+void IRGraphVisitor::visit(const UIntImm *) {
 }
 
 void IRGraphVisitor::visit(const FloatImm *) {
@@ -372,7 +381,7 @@ void IRGraphVisitor::visit(const AssertStmt *op) {
     include(op->message);
 }
 
-void IRGraphVisitor::visit(const Pipeline *op) {
+void IRGraphVisitor::visit(const ProducerConsumer *op) {
     include(op->produce);
     if (op->update.defined()) include(op->update);
     include(op->consume);
@@ -403,6 +412,9 @@ void IRGraphVisitor::visit(const Allocate *op) {
         include(op->extents[i]);
     }
     include(op->condition);
+    if (op->new_expr.defined()) {
+        include(op->new_expr);
+    }
     include(op->body);
 }
 

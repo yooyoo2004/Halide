@@ -150,6 +150,10 @@ public:
     }
     // @}
 
+    void set_default_value(const T &value) {
+        param.set_default(value);
+    }
+
     /** You can use this parameter as an expression in a halide
      * function definition */
     operator Expr() const {
@@ -175,7 +179,8 @@ public:
  * the function (if any). It is rare that this function is necessary
  * (e.g. to pass the user context to an extern function written in C). */
 inline Expr user_context_value() {
-    return Internal::Variable::make(Handle(), "__user_context");
+    return Internal::Variable::make(Handle(), "__user_context",
+        Internal::Parameter(Handle(), false, 0, "__user_context", true));
 }
 
 /** A handle on the output buffer of a pipeline. Used to make static
@@ -185,20 +190,20 @@ protected:
     /** A reference-counted handle on the internal parameter object */
     Internal::Parameter param;
 
+    /** Is this an input or an output? OutputImageParam is the base class for both. */
+    Argument::Kind kind;
+    
     void add_implicit_args_if_placeholder(std::vector<Expr> &args,
                                           Expr last_arg,
                                           int total_args,
                                           bool *placeholder_seen) const;
 public:
 
-    /** Construct a NULL image parameter handle. */
+    /** Construct a nullptr image parameter handle. */
     OutputImageParam() {}
 
-    /** Virtual destructor. Does nothing. */
-    EXPORT virtual ~OutputImageParam();
-
     /** Construct an OutputImageParam that wraps an Internal Parameter object. */
-    EXPORT OutputImageParam(const Internal::Parameter &p);
+    EXPORT OutputImageParam(const Internal::Parameter &p, Argument::Kind k);
 
     /** Get the name of this Param */
     EXPORT const std::string &name() const;
@@ -206,8 +211,8 @@ public:
     /** Get the type of the image data this Param refers to */
     EXPORT Type type() const;
 
-    /** Is this parameter handle non-NULL */
-    EXPORT bool defined();
+    /** Is this parameter handle non-nullptr */
+    EXPORT bool defined() const;
 
     /** Get an expression representing the minimum coordinates of this image
      * parameter in the given dimension. */
@@ -295,7 +300,7 @@ public:
     /** Construct the appropriate argument matching this parameter,
      * for the purpose of generating the right type signature when
      * statically compiling halide pipelines. */
-    EXPORT virtual operator Argument() const;
+    EXPORT operator Argument() const;
 
     /** Using a param as the argument to an external stage treats it
      * as an Expr */
@@ -307,11 +312,8 @@ class ImageParam : public OutputImageParam {
 
 public:
 
-    /** Construct a NULL image parameter handle. */
+    /** Construct a nullptr image parameter handle. */
     ImageParam() : OutputImageParam() {}
-
-    /** Virtual destructor. Does nothing. */
-    EXPORT virtual ~ImageParam();
 
     /** Construct an image parameter of the given type and
      * dimensionality, with an auto-generated unique name. */
@@ -358,11 +360,6 @@ public:
     operator Expr() const {
         return (*this)(_);
     }
-
-    /** Construct the appropriate argument matching this parameter,
-     * for the purpose of generating the right type signature when
-     * statically compiling halide pipelines. */
-    EXPORT virtual operator Argument() const;
 };
 
 }

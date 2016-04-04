@@ -40,11 +40,11 @@ inline bool uses_extern_image(Stmt s) {
 
 class FlattenDimensions : public IRMutator {
 public:
-    FlattenDimensions(const string &output, const map<string, Function> &e)
-        : output(output), env(e) {}
+    FlattenDimensions(const vector<Function> &outputs, const map<string, Function> &e)
+        : outputs(outputs), env(e) {}
     Scope<int> scope;
 private:
-    const string &output;
+    const vector<Function> &outputs;
     const map<string, Function> &env;
     Scope<int> realizations;
 
@@ -54,7 +54,7 @@ private:
         vector<Expr> mins(args.size()), strides(args.size());
 
         for (size_t i = 0; i < args.size(); i++) {
-            string dim = int_to_string(i);
+            string dim = std::to_string(i);
             string stride_name = name + ".stride." + dim;
             string min_name = name + ".min." + dim;
             string stride_name_constrained = stride_name + ".constrained";
@@ -132,14 +132,14 @@ private:
         for (size_t idx = 0; idx < realize->types.size(); idx++) {
             string buffer_name = realize->name;
             if (realize->types.size() > 1) {
-                buffer_name = buffer_name + '.' + int_to_string(idx);
+                buffer_name = buffer_name + '.' + std::to_string(idx);
             }
 
             // Make the names for the mins, extents, and strides
             int dims = realize->bounds.size();
             vector<string> min_name(dims), extent_name(dims), stride_name(dims);
             for (int i = 0; i < dims; i++) {
-                string d = int_to_string(i);
+                string d = std::to_string(i);
                 min_name[i] = buffer_name + ".min." + d;
                 stride_name[i] = buffer_name + ".stride." + d;
                 extent_name[i] = buffer_name + ".extent." + d;
@@ -152,21 +152,20 @@ private:
             }
 
             // Promote the type to be a multiple of 8 bits
-            Type t = realize->types[idx];
-            t.bits = t.bytes() * 8;
+            Type t = realize->types[idx].with_bits(realize->types[idx].bytes() * 8);
 
             // Create a buffer_t object for this allocation.
             vector<Expr> args(dims*3 + 2);
             //args[0] = Call::make(Handle(), Call::null_handle, vector<Expr>(), Call::Intrinsic);
             Expr first_elem = Load::make(t, buffer_name, 0, Buffer(), Parameter());
-            args[0] = Call::make(Handle(), Call::address_of, vec(first_elem), Call::Intrinsic);
-            args[1] = realize->types[idx].bytes();
+            args[0] = Call::make(Handle(), Call::address_of, {first_elem}, Call::PureIntrinsic);
+            args[1] = make_zero(realize->types[idx]);
             for (int i = 0; i < dims; i++) {
                 args[3*i+2] = min_var[i];
                 args[3*i+3] = extent_var[i];
                 args[3*i+4] = stride_var[i];
             }
-            Expr buf = Call::make(Handle(), Call::create_buffer_t,
+            Expr buf = Call::make(type_of<struct buffer_t *>(), Call::create_buffer_t,
                                   args, Call::Intrinsic);
             stmt = LetStmt::make(buffer_name + ".buffer",
                                  buf,
@@ -208,15 +207,14 @@ private:
             Expr value = mutate(provide->values[i]);
 
             // Promote the type to be a multiple of 8 bits
-            Type t = value.type();
-            t.bits = t.bytes() * 8;
-            if (t.bits != value.type().bits) {
+            Type t = value.type().with_bits(value.type().bytes() * 8);
+            if (t.bits() != value.type().bits()) {
                 value = Cast::make(t, value);
             }
 
             values[i].value = value;
             if (values.size() > 1) {
-                values[i].name = provide->name + "." + int_to_string(i);
+                values[i].name = provide->name + "." + std::to_string(i);
             } else {
                 values[i].name = provide->name;
             }
@@ -228,12 +226,17 @@ private:
         vector<ProvideValue> values;
         flatten_provide_values(values, provide);
 
+        bool is_output = false;
+        for (Function f : outputs) {
+            is_output |= f.name() == provide->name;
+            if (is_output) break;
+        }
+
         Stmt result;
         for (size_t i = 0; i < values.size(); i++) {
             const ProvideValue &cv = values[i];
 
-            Expr idx = mutate(flatten_args(cv.name, provide->args,
-                                           provide->name != output));
+            Expr idx = mutate(flatten_args(cv.name, provide->args, !is_output));
             Expr var = Variable::make(cv.value.type(), cv.name + ".value");
             Stmt store = Store::make(cv.name, var, idx);
 
@@ -256,12 +259,16 @@ private:
         vector<ProvideValue> values;
         flatten_provide_values(values, provide);
 
+        bool is_output = false;
+        for (Function f : outputs) {
+            is_output |= f.name() == provide->name;
+        }
+
         Stmt result;
         for (size_t i = 0; i < values.size(); i++) {
             const ProvideValue &cv = values[i];
 
-            Expr idx = mutate(flatten_args(cv.name, provide->args,
-                                           provide->name != output));
+            Expr idx = mutate(flatten_args(cv.name, provide->args, !is_output));
             Stmt store = Store::make(cv.name, cv.value, idx);
 
             if (result.defined()) {
@@ -306,8 +313,31 @@ private:
     }
 
     void visit(const Call *call) {
+        if (call->call_type == Call::Halide ||
+            call->call_type == Call::Image) {
+            string name = call->name;
+            if (call->call_type == Call::Halide &&
+                call->func.outputs() > 1) {
+                name = name + '.' + std::to_string(call->value_index);
+            }
 
-        if (call->call_type == Call::Extern || call->call_type == Call::Intrinsic) {
+            bool is_output = false;
+            for (Function f : outputs) {
+                is_output |= f.name() == call->name;
+            }
+
+            bool is_input = env.find(call->name) == env.end();
+
+            // Promote the type to be a multiple of 8 bits
+            Type t = call->type.with_bits(call->type.bytes() * 8);
+
+            Expr idx = mutate(flatten_args(name, call->args, !(is_output || is_input)));
+            expr = Load::make(t, name, idx, call->image, call->param);
+
+            if (call->type.bits() != t.bits()) {
+                expr = Cast::make(call->type, expr);
+            }
+        } else {
             vector<Expr> args(call->args.size());
             bool changed = false;
             for (size_t i = 0; i < args.size(); i++) {
@@ -318,25 +348,6 @@ private:
                 expr = call;
             } else {
                 expr = Call::make(call->type, call->name, args, call->call_type);
-            }
-        } else {
-            string name = call->name;
-            if (call->call_type == Call::Halide &&
-                call->func.outputs() > 1) {
-                name = name + '.' + int_to_string(call->value_index);
-            }
-
-            // Promote the type to be a multiple of 8 bits
-            Type t = call->type;
-            t.bits = t.bytes() * 8;
-
-            Expr idx = mutate(flatten_args(name, call->args,
-                                           call->name != output &&
-                                           env.find(call->name) != env.end()));
-            expr = Load::make(t, name, idx, call->image, call->param);
-
-            if (call->type.bits != t.bits) {
-                expr = Cast::make(call->type, expr);
             }
         }
     }
@@ -357,8 +368,10 @@ private:
 };
 
 
-Stmt storage_flattening(Stmt s, const string &output, const map<string, Function> &env) {
-    return FlattenDimensions(output, env).mutate(s);
+Stmt storage_flattening(Stmt s,
+                        const vector<Function> &outputs,
+                        const map<string, Function> &env) {
+    return FlattenDimensions(outputs, env).mutate(s);
 }
 
 }

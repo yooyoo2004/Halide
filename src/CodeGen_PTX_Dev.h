@@ -28,7 +28,7 @@ public:
 
     void add_kernel(Stmt stmt,
                     const std::string &name,
-                    const std::vector<GPU_Argument> &args);
+                    const std::vector<DeviceArgument> &args);
 
     static void test();
 
@@ -49,9 +49,6 @@ protected:
      * a single pipeline. */
     /* override */ virtual void init_module();
 
-    /* override */ virtual llvm::Triple get_target_triple() const;
-    /* override */ virtual llvm::DataLayout get_data_layout() const;
-
     /** We hold onto the basic block at the start of the device
      * function in order to inject allocas */
     llvm::BasicBlock *entry_block;
@@ -61,6 +58,7 @@ protected:
     void visit(const For *);
     void visit(const Allocate *);
     void visit(const Free *);
+    void visit(const AssertStmt *);
     // @}
 
     std::string march() const;
@@ -68,6 +66,7 @@ protected:
     std::string mattrs() const;
     bool use_soft_float_abi() const;
     int native_vector_bits() const;
+    bool promote_indices() const {return false;}
 
     /** Map from simt variable names (e.g. foo.__block_id_x) to the llvm
      * ptx intrinsic functions to call to get them. */

@@ -11,9 +11,17 @@ namespace llvm {
 class Value;
 class Module;
 class Function;
+#if LLVM_VERSION >= 39
+class IRBuilderDefaultInserter;
+#else
 template<bool> class IRBuilderDefaultInserter;
+#endif
 class ConstantFolder;
+#if LLVM_VERSION >= 39
+template<typename, typename> class IRBuilder;
+#else
 template<bool, typename, typename> class IRBuilder;
+#endif
 class LLVMContext;
 class Type;
 class StructType;
@@ -24,13 +32,16 @@ class AllocaInst;
 class Constant;
 class Triple;
 class MDNode;
+class NamedMDNode;
 class DataLayout;
 class BasicBlock;
+class GlobalVariable;
 }
 
 #include <map>
 #include <string>
 #include <vector>
+#include <memory>
 
 #include "IRVisitor.h"
 #include "Module.h"
@@ -56,7 +67,7 @@ public:
     virtual ~CodeGen_LLVM();
 
     /** Takes a halide Module and compiles it to an llvm Module. */
-    virtual llvm::Module *compile(const Module &module);
+    virtual std::unique_ptr<llvm::Module> compile(const Module &module);
 
     /** The target we're generating code for */
     const Target &get_target() const { return target; }
@@ -69,25 +80,37 @@ protected:
 
     /** Compile a specific halide declaration into the llvm Module. */
     // @{
-    virtual void compile_func(const LoweredFunc &func);
+    virtual void compile_func(const LoweredFunc &func, const std::string &simple_name, const std::string &extern_name);
     virtual void compile_buffer(const Buffer &buffer);
+    // @}
+
+    /** Helper functions for compiling Halide functions to llvm
+     * functions. begin_func performs all the work necessary to begin
+     * generating code for a function with a given argument list with
+     * the IRBuilder. A call to begin_func should be a followed by a
+     * call to end_func with the same arguments, to generate the
+     * appropriate cleanup code. */
+    // @{
+    virtual void begin_func(LoweredFunc::LinkageType linkage, const std::string &simple_name,
+                            const std::string &extern_name, const std::vector<Argument> &args);
+    virtual void end_func(const std::vector<Argument> &args);
     // @}
 
     /** What should be passed as -mcpu, -mattrs, and related for
      * compilation. The architecture-specific code generator should
      * define these. */
     // @{
-    virtual llvm::Triple get_target_triple() const = 0;
-    virtual llvm::DataLayout get_data_layout() const = 0;
     virtual std::string mcpu() const = 0;
     virtual std::string mattrs() const = 0;
     virtual bool use_soft_float_abi() const = 0;
     // @}
 
-    // What's the natural vector bit-width to use for loads, stores, etc.
-    // @{
+    /** Should indexing math be promoted to 64-bit on platforms with
+     * 64-bit pointers? */
+    virtual bool promote_indices() const {return true;}
+
+    /** What's the natural vector bit-width to use for loads, stores, etc. */
     virtual int native_vector_bits() const = 0;
-    // @}
 
     /** Initialize internal llvm state for the enabled targets. */
     static void initialize_llvm();
@@ -102,11 +125,16 @@ protected:
     static bool llvm_AArch64_enabled;
     static bool llvm_NVPTX_enabled;
     static bool llvm_Mips_enabled;
+    static bool llvm_PowerPC_enabled;
 
-    llvm::Module *module;
+    std::unique_ptr<llvm::Module> module;
     llvm::Function *function;
     llvm::LLVMContext *context;
-    llvm::IRBuilder<true, llvm::ConstantFolder, llvm::IRBuilderDefaultInserter<true> > *builder;
+#if LLVM_VERSION >= 39
+    llvm::IRBuilder<llvm::ConstantFolder, llvm::IRBuilderDefaultInserter> *builder;
+#else
+    llvm::IRBuilder<true, llvm::ConstantFolder, llvm::IRBuilderDefaultInserter<true>> *builder;
+#endif
     llvm::Value *value;
     llvm::MDNode *very_likely_branch;
     //@}
@@ -135,7 +163,7 @@ protected:
 
     /** Fetch an entry from the symbol table. If the symbol is not
      * found, it either errors out (if the second arg is true), or
-     * returns NULL. */
+     * returns nullptr. */
     llvm::Value* sym_get(const std::string &name,
                          bool must_succeed = true) const;
 
@@ -199,16 +227,24 @@ protected:
     void push_buffer(const std::string &name, llvm::Value *buffer);
     void pop_buffer(const std::string &name);
 
+    /** Some destructors should always be called. Others should only
+     * be called if the pipeline is exiting with an error code. */
+    enum DestructorType {Always, OnError};
+
     /* Call this at the location of object creation to register how an
      * object should be destroyed. This does three things:
      * 1) Emits code here that puts the object in a unique
      * null-initialized stack slot
-     * 2) Adds an instruction to the error handling block that calls the
+     * 2) Adds an instruction to the destructor block that calls the
      * destructor on that stack slot if it's not null.
-     * 3) Returns that instruction, so that you can also insert a
-     * clone of it where you actually want to delete the object in the
-     * non-error case. */
-    llvm::Instruction *register_destructor(llvm::Function *destructor_fn, llvm::Value *obj);
+     * 3) Returns that stack slot, so you can neuter the destructor
+     * (by storing null to the stack slot) or destroy the object early
+     * (by calling trigger_destructor).
+     */
+    llvm::Value *register_destructor(llvm::Function *destructor_fn, llvm::Value *obj, DestructorType when);
+
+    /** Call a destructor early. Pass in the value returned by register destructor. */
+    void trigger_destructor(llvm::Function *destructor_fn, llvm::Value *stack_slot);
 
     /** Retrieves the block containing the error handling
      * code. Creates it if it doesn't already exist for this
@@ -219,9 +255,12 @@ protected:
      * null), or evaluates and returns the message, which must be an
      * Int(32) expression. */
     // @{
-    void create_assertion(llvm::Value *condition, Expr message, llvm::Value *error_code = NULL);
-
+    void create_assertion(llvm::Value *condition, Expr message, llvm::Value *error_code = nullptr);
     // @}
+
+    /** Return the the pipeline with the given error code. Will run
+     * the destructor block. */
+    void return_with_error_code(llvm::Value *error_code);
 
     /** Put a string constant in the module as a global variable and return a pointer to it. */
     llvm::Constant *create_string_constant(const std::string &str);
@@ -230,7 +269,7 @@ protected:
     llvm::Constant *create_constant_binary_blob(const std::vector<char> &data, const std::string &name);
 
     /** Widen an llvm scalar into an llvm vector with the given number of lanes. */
-    llvm::Value *create_broadcast(llvm::Value *, int width);
+    llvm::Value *create_broadcast(llvm::Value *, int lanes);
 
     /** Given an llvm value representing a pointer to a buffer_t, extract various subfields.
      * The *_ptr variants return a pointer to the struct element, while the basic variants
@@ -267,6 +306,17 @@ protected:
      * different buffers */
     void add_tbaa_metadata(llvm::Instruction *inst, std::string buffer, Expr index);
 
+    /** Helpers for implementing fast integer division. */
+    // @{
+    // Compute high_half(a*b) >> shr. Note that this is a shift in
+    // addition to the implicit shift due to taking the upper half of
+    // the multiply result.
+    virtual Expr mulhi_shr(Expr a, Expr b, int shr);
+    // Compute (a+b)/2, assuming a < b.
+    virtual Expr sorted_avg(Expr a, Expr b);
+    // @}
+
+
     using IRVisitor::visit;
 
     /** Generate code for various IR nodes. These can be overridden by
@@ -274,6 +324,7 @@ protected:
      * optimizations. The result of each is stored in \ref value */
     // @{
     virtual void visit(const IntImm *);
+    virtual void visit(const UIntImm *);
     virtual void visit(const FloatImm *);
     virtual void visit(const StringImm *);
     virtual void visit(const Cast *);
@@ -302,7 +353,7 @@ protected:
     virtual void visit(const Let *);
     virtual void visit(const LetStmt *);
     virtual void visit(const AssertStmt *);
-    virtual void visit(const Pipeline *);
+    virtual void visit(const ProducerConsumer *);
     virtual void visit(const For *);
     virtual void visit(const Store *);
     virtual void visit(const Block *);
@@ -356,16 +407,16 @@ protected:
 
     /** Generate a call to a vector intrinsic or runtime inlined
      * function. The arguments are sliced up into vectors of the width
-     * given by 'intrin_vector_width', the intrinsic is called on each
+     * given by 'intrin_lanes', the intrinsic is called on each
      * piece, then the results (if any) are concatenated back together
      * into the original type 't'. For the version that takes an
      * llvm::Type *, the type may be void, so the vector width of the
      * arguments must be specified explicitly as
-     * 'called_vector_width'. */
+     * 'called_lanes'. */
     // @{
-    llvm::Value *call_intrin(Type t, int intrin_vector_width,
+    llvm::Value *call_intrin(Type t, int intrin_lanes,
                              const std::string &name, std::vector<Expr>);
-    llvm::Value *call_intrin(llvm::Type *t, int intrin_vector_width,
+    llvm::Value *call_intrin(llvm::Type *t, int intrin_lanes,
                              const std::string &name, std::vector<llvm::Value *>);
     // @}
 
@@ -390,9 +441,9 @@ protected:
      *
      * So for a 5-wide vector, it tries: 5, 8, 4, 2, 16.
      *
-     * If there's no match, returns (NULL, 0).
+     * If there's no match, returns (nullptr, 0).
      */
-    std::pair<llvm::Function *, int> find_vector_runtime_function(const std::string &name, int width);
+    std::pair<llvm::Function *, int> find_vector_runtime_function(const std::string &name, int lanes);
 
 private:
 
@@ -428,7 +479,8 @@ private:
 }
 
 /** Given a Halide module, generate an llvm::Module. */
-EXPORT llvm::Module *codegen_llvm(const Module &module, llvm::LLVMContext &context);
+EXPORT std::unique_ptr<llvm::Module> codegen_llvm(const Module &module,
+                                                  llvm::LLVMContext &context);
 
 }
 

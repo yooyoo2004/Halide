@@ -57,6 +57,10 @@ public:
         return _top;
     }
 
+    const T &top_ref() const {
+        return _top;
+    }
+
     bool empty() const {
         return _empty;
     }
@@ -69,7 +73,7 @@ public:
 template<typename T>
 class Scope {
 private:
-    std::map<std::string, SmallStack<T> > table;
+    std::map<std::string, SmallStack<T>> table;
 
     // Copying a scope object copies a large table full of strings and
     // stacks. Bad idea.
@@ -80,7 +84,7 @@ private:
 
 
 public:
-    Scope() : containing_scope(NULL) {}
+    Scope() : containing_scope(nullptr) {}
 
     /** Set the parent scope. If lookups fail in this scope, they
      * check the containing scope before returning an error. Caller is
@@ -93,13 +97,13 @@ public:
      * arguments, which would otherwise require a copy constructor
      * (with llvm in c++98 mode) */
     static const Scope<T> &empty_scope() {
-        static Scope<T> _empty_scope;
-        return _empty_scope;
+        static Scope<T> *_empty_scope = new Scope<T>();
+        return *_empty_scope;
     }
 
     /** Retrieve the value referred to by a name */
     T get(const std::string &name) const {
-        typename std::map<std::string, SmallStack<T> >::const_iterator iter = table.find(name);
+        typename std::map<std::string, SmallStack<T>>::const_iterator iter = table.find(name);
         if (iter == table.end() || iter->second.empty()) {
             if (containing_scope) {
                 return containing_scope->get(name);
@@ -112,7 +116,7 @@ public:
 
     /** Return a reference to an entry. Does not consider the containing scope. */
     T &ref(const std::string &name) {
-        typename std::map<std::string, SmallStack<T> >::iterator iter = table.find(name);
+        typename std::map<std::string, SmallStack<T>>::iterator iter = table.find(name);
         if (iter == table.end() || iter->second.empty()) {
             internal_error << "Symbol '" << name << "' not found\n";
         }
@@ -121,7 +125,7 @@ public:
 
     /** Tests if a name is in scope */
     bool contains(const std::string &name) const {
-        typename std::map<std::string, SmallStack<T> >::const_iterator iter = table.find(name);
+        typename std::map<std::string, SmallStack<T>>::const_iterator iter = table.find(name);
         if (iter == table.end() || iter->second.empty()) {
             if (containing_scope) {
                 return containing_scope->contains(name);
@@ -143,7 +147,7 @@ public:
      * was (or remove it entirely if there was nothing else of the
      * same name in an outer scope) */
     void pop(const std::string &name) {
-        typename std::map<std::string, SmallStack<T> >::iterator iter = table.find(name);
+        typename std::map<std::string, SmallStack<T>>::iterator iter = table.find(name);
         internal_assert(iter != table.end()) << "Name not in symbol table: " << name << "\n";
         iter->second.pop();
         if (iter->second.empty()) {
@@ -153,9 +157,9 @@ public:
 
     /** Iterate through the scope. Does not capture any containing scope. */
     class const_iterator {
-        typename std::map<std::string, SmallStack<T> >::const_iterator iter;
+        typename std::map<std::string, SmallStack<T>>::const_iterator iter;
     public:
-        explicit const_iterator(const typename std::map<std::string, SmallStack<T> >::const_iterator &i) :
+        explicit const_iterator(const typename std::map<std::string, SmallStack<T>>::const_iterator &i) :
             iter(i) {
         }
 
@@ -178,7 +182,7 @@ public:
         }
 
         const T &value() {
-            return iter->second.top();
+            return iter->second.top_ref();
         }
     };
 
@@ -191,9 +195,9 @@ public:
     }
 
     class iterator {
-        typename std::map<std::string, SmallStack<T> >::iterator iter;
+        typename std::map<std::string, SmallStack<T>>::iterator iter;
     public:
-        explicit iterator(typename std::map<std::string, SmallStack<T> >::iterator i) :
+        explicit iterator(typename std::map<std::string, SmallStack<T>>::iterator i) :
             iter(i) {
         }
 

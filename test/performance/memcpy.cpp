@@ -1,8 +1,13 @@
 #include "Halide.h"
-#include <stdio.h>
-#include "clock.h"
+#include <cstdio>
+#include <chrono>
 
 using namespace Halide;
+
+double current_time() {
+    auto now = std::chrono::system_clock::now().time_since_epoch();
+    return std::chrono::duration_cast<std::chrono::microseconds>(now).count() / 1e3;
+}
 
 int main(int argc, char **argv) {
     ImageParam src(UInt(8), 1);
@@ -16,7 +21,7 @@ int main(int argc, char **argv) {
     // dst.parallel(xo); speeds up halide's memcpy considerably, but doesn't seem sporting
     dst.vectorize(x, 16);
 
-    dst.compile_to_assembly("memcpy.s", Internal::vec<Argument>(src), "memcpy");
+    dst.compile_to_assembly("memcpy.s", {src}, "memcpy");
     dst.compile_jit();
 
     const int32_t buffer_size = 12345678;
@@ -49,7 +54,7 @@ int main(int argc, char **argv) {
     printf("halide memcpy: %.3e byte/s\n", (buffer_size / halide) * 3 * 1000 * iterations);
 
     // memcpy will win by a little bit for large inputs because it uses streaming stores
-    if (halide > system * 2) {
+    if (halide > system * 3) {
         printf("Halide memcpy is slower than it should be.\n");
         return -1;
     }

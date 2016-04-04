@@ -7,7 +7,6 @@ using Halide::Expr;
 using Halide::Func;
 using Halide::Image;
 using Halide::Internal::GeneratorParamValues;
-using Halide::Internal::Parameter;
 
 const int kSize = 32;
 
@@ -61,6 +60,14 @@ bool constant_expr_equals(Expr expr, T value) {
     return false;
 }
 
+bool operator==(const Halide::Argument& a, const Halide::Argument& b) {
+    return a.name == a.name || a.kind == b.kind || a.type == b.type || a.dimensions == b.dimensions;
+}
+
+bool operator!=(const Halide::Argument& a, const Halide::Argument& b) {
+    return !(a == b);
+}
+
 int main(int argc, char **argv) {
     // Quick test to verify the Generator does what we expect.
     {
@@ -70,14 +77,15 @@ int main(int argc, char **argv) {
         // ParamTest::build() mutates its input ImageParam based on
         // a GeneratorParam, so we must call build() before we set
         // the input (otherwise we'll get a buffer type mismatch error).
-        Func f = gen.build();
+        Halide::Pipeline p = gen.build();
 
         Image<float> src = MakeImage<float>();
         gen.input.set(src);
         gen.float_arg.set(1.234f);
         gen.int_arg.set(33);
 
-        Image<int16_t> dst = f.realize(kSize, kSize, 3, gen.get_target());
+        Halide::Realization r = p.outputs()[0].realize(kSize, kSize, 3, gen.get_target());
+        Image<int16_t> dst = r[1];
         verify(src, 1.234f, 33, dst);
     }
 
@@ -86,7 +94,7 @@ int main(int argc, char **argv) {
     {
         ParamTest gen;
         GeneratorParamValues v = gen.get_generator_param_values();
-        if (v.size() != 3) {
+        if (v.size() != 6) {
             fprintf(stderr, "Wrong number of GeneratorParamValues %d\n", (int) v.size());
             exit(-1);
         }
@@ -115,11 +123,10 @@ int main(int argc, char **argv) {
         }
     }
 
-    // Test Generator::get_filter_arguments() and Generator::get_filter_parameters()
+    // Test Generator::get_filter_arguments()
     {
         ParamTest gen;
         std::vector<Argument> args = gen.get_filter_arguments();
-        std::vector<Parameter> params = gen.get_filter_parameters();
         if (args.size() != 3 ||
             args[0].name != "input" || args[1].name != "float_arg" || args[2].name != "int_arg" ||
             !args[0].is_buffer() || !args[1].is_scalar() || !args[2].is_scalar() ||
@@ -139,30 +146,17 @@ int main(int argc, char **argv) {
             fprintf(stderr, "constraints for int_arg are incorrect\n");
             exit(-1);
         }
-        if (params.size() != 3 || params[0].name() != "input" || params[1].name() != "float_arg" || params[2].name() != "int_arg") {
-            fprintf(stderr, "get_filter_parameters is incorrect\n");
-            exit(-1);
-        }
-        // Default type for param[0] should be UInt(8)
-        if (params[0].type() != Halide::UInt(8)) {
-            fprintf(stderr, "params[0].type() should be uint8\n");
-            exit(-1);
-        }
-        // Change the GeneratorParam for input_type; this shouldn't affect anything
-        // until after build() is called.
-        gen.set_generator_param_values({ { "input_type", "float32" } });
-        params = gen.get_filter_parameters();
-        if (params[0].type() != Halide::UInt(8)) {
-            fprintf(stderr, "params[0].type() should be uint8\n");
-            exit(-1);
-        }
+    }
 
-        // This should change the type of param[0] (for subsequent calls to get_filter_parameters)
-        gen.build();
-
-        params = gen.get_filter_parameters();
-        if (params[0].type() != Halide::Float(32)) {
-            fprintf(stderr, "params[0].type() should be float32\n");
+    // Test Generator::get_filter_output_types()
+    {
+        ParamTest gen;
+        std::vector<Argument> args = gen.get_filter_output_types();
+        if (args.size() != 3 ||
+            args[0] != Halide::Argument("result_0", Halide::Argument::OutputBuffer, Halide::UInt(8), 3) ||
+            args[1] != Halide::Argument("result_1", Halide::Argument::OutputBuffer, Halide::Float(32), 3) ||
+            args[2] != Halide::Argument("result_2", Halide::Argument::OutputBuffer, Halide::Int(16), 2)) {
+            fprintf(stderr, "get_filter_output_types is incorrect\n");
             exit(-1);
         }
     }

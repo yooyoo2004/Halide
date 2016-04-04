@@ -10,6 +10,7 @@
 
 #include "Debug.h"
 #include "Error.h"
+#include "Float16.h"
 #include "Type.h"
 #include "IntrusivePtr.h"
 #include "Util.h"
@@ -107,7 +108,7 @@ struct IRHandle : public IntrusivePtr<const IRNode> {
     }
 
     /** Downcast this ir node to its actual type (e.g. Add, or
-     * Select). This returns NULL if the node is not of the requested
+     * Select). This returns nullptr if the node is not of the requested
      * type. Example usage:
      *
      * if (const Add *add = node->as<Add>()) {
@@ -118,38 +119,80 @@ struct IRHandle : public IntrusivePtr<const IRNode> {
         if (ptr->type_info() == &T::_type_info) {
             return (const T *)ptr;
         }
-        return NULL;
+        return nullptr;
     }
 };
 
 /** Integer constants */
 struct IntImm : public ExprNode<IntImm> {
-    int value;
+    int64_t value;
 
-    static IntImm *make(int value) {
-        if (value >= -8 && value <= 8 &&
-            !small_int_cache[value + 8].ref_count.is_zero()) {
-            return &small_int_cache[value + 8];
+    static const IntImm *make(Type t, int64_t value) {
+        internal_assert(t.is_int() && t.is_scalar()) << "IntImm must be a scalar Int\n";
+        internal_assert(t.bits() == 8 || t.bits() == 16 || t.bits() == 32 || t.bits() == 64)
+            << "IntImm must be 8, 16, 32, or 64-bit\n";
+
+        if (t.bits() == 32 && value >= -8 && value <= 8 &&
+            small_int_cache[(int)value + 8]) {
+            return small_int_cache[(int)value + 8];
         }
+
         IntImm *node = new IntImm;
-        node->type = Int(32);
+        node->type = t;
+        // Normalize the value by dropping the high bits
+        value <<= (64 - t.bits());
+        // Then sign-extending to get them back
+        value >>= (64 - t.bits());
         node->value = value;
         return node;
     }
 
 private:
     /** ints from -8 to 8 */
-    static IntImm small_int_cache[17];
+    EXPORT static const IntImm *small_int_cache[17];
+};
+
+/** Unsigned integer constants */
+struct UIntImm : public ExprNode<UIntImm> {
+    uint64_t value;
+
+    static const UIntImm *make(Type t, uint64_t value) {
+        internal_assert(t.is_uint() && t.is_scalar())
+            << "UIntImm must be a scalar UInt\n";
+        internal_assert(t.bits() == 1 || t.bits() == 8 || t.bits() == 16 || t.bits() == 32 || t.bits() == 64)
+            << "UIntImm must be 1, 8, 16, 32, or 64-bit\n";
+        UIntImm *node = new UIntImm;
+        node->type = t;
+        // Normalize the value by dropping the high bits
+        value <<= (64 - t.bits());
+        value >>= (64 - t.bits());
+        node->value = value;
+        return node;
+    }
 };
 
 /** Floating point constants */
 struct FloatImm : public ExprNode<FloatImm> {
-    float value;
+    double value;
 
-    static FloatImm *make(float value) {
+    static const FloatImm *make(Type t, double value) {
+        internal_assert(t.is_float() && t.is_scalar()) << "FloatImm must be a scalar Float\n";
         FloatImm *node = new FloatImm;
-        node->type = Float(32);
-        node->value = value;
+        node->type = t;
+        switch (t.bits()) {
+        case 16:
+            node->value = (double)((float16_t)value);
+            break;
+        case 32:
+            node->value = (float)value;
+            break;
+        case 64:
+            node->value = value;
+            break;
+        default:
+            internal_error << "FloatImm must be 16, 32, or 64-bit\n";
+        }
+
         return node;
     }
 };
@@ -158,9 +201,9 @@ struct FloatImm : public ExprNode<FloatImm> {
 struct StringImm : public ExprNode<StringImm> {
     std::string value;
 
-    static StringImm *make(const std::string &val) {
+    static const StringImm *make(const std::string &val) {
         StringImm *node = new StringImm;
-        node->type = Handle();
+        node->type = type_of<const char *>();
         node->value = val;
         return node;
     }
@@ -179,27 +222,23 @@ struct Expr : public Internal::IRHandle {
     Expr(const Internal::BaseExprNode *n) : IRHandle(n) {}
 
 
-    /** Make an expression representing a const 32-bit int (i.e. an IntImm) */
-    EXPORT Expr(int x) : IRHandle(Internal::IntImm::make(x)) {
-    }
-
-    /** Make an expression representing a const 32-bit float (i.e. a FloatImm) */
-    EXPORT Expr(float x) : IRHandle(Internal::FloatImm::make(x)) {
-    }
-
-    /** Make an expression representing a const 32-bit float, given a
-     * double. Also emits a warning due to truncation. */
-    EXPORT Expr(double x) : IRHandle(Internal::FloatImm::make((float)x)) {
-        user_warning << "Halide cannot represent double constants. "
-                     << "Converting " << x << " to float. "
-                     << "If you wanted a double, use cast<double>(" << x
-                     << (x == (int64_t)(x) ? ".0f" : "f")
-                     << ")\n";
-    }
+    /** Make an expression representing numeric constants of various types. */
+    // @{
+    EXPORT explicit Expr(int8_t x)    : IRHandle(Internal::IntImm::make(Int(8), x)) {}
+    EXPORT explicit Expr(int16_t x)   : IRHandle(Internal::IntImm::make(Int(16), x)) {}
+    EXPORT          Expr(int32_t x)   : IRHandle(Internal::IntImm::make(Int(32), x)) {}
+    EXPORT explicit Expr(int64_t x)   : IRHandle(Internal::IntImm::make(Int(64), x)) {}
+    EXPORT explicit Expr(uint8_t x)   : IRHandle(Internal::UIntImm::make(UInt(8), x)) {}
+    EXPORT explicit Expr(uint16_t x)  : IRHandle(Internal::UIntImm::make(UInt(16), x)) {}
+    EXPORT explicit Expr(uint32_t x)  : IRHandle(Internal::UIntImm::make(UInt(32), x)) {}
+    EXPORT explicit Expr(uint64_t x)  : IRHandle(Internal::UIntImm::make(UInt(64), x)) {}
+    EXPORT          Expr(float16_t x) : IRHandle(Internal::FloatImm::make(Float(16), (double)x)) {}
+    EXPORT          Expr(float x)     : IRHandle(Internal::FloatImm::make(Float(32), x)) {}
+    EXPORT explicit Expr(double x)    : IRHandle(Internal::FloatImm::make(Float(64), x)) {}
+    // @}
 
     /** Make an expression representing a const string (i.e. a StringImm) */
-    EXPORT Expr(const std::string &s) : IRHandle(Internal::StringImm::make(s)) {
-    }
+    EXPORT          Expr(const std::string &s) : IRHandle(Internal::StringImm::make(s)) {}
 
     /** Get the type of this expression node */
     Type type() const {
@@ -223,8 +262,23 @@ enum class DeviceAPI {
     Default_GPU,
     CUDA,
     OpenCL,
-    GLSL
+    GLSL,
+    Renderscript,
+    OpenGLCompute,
+    Metal
 };
+
+/** An array containing all the device apis. Useful for iterating
+ * through them. */
+const DeviceAPI all_device_apis[] = {DeviceAPI::Parent,
+                                     DeviceAPI::Host,
+                                     DeviceAPI::Default_GPU,
+                                     DeviceAPI::CUDA,
+                                     DeviceAPI::OpenCL,
+                                     DeviceAPI::GLSL,
+                                     DeviceAPI::Renderscript,
+                                     DeviceAPI::OpenGLCompute,
+                                     DeviceAPI::Metal};
 
 namespace Internal {
 

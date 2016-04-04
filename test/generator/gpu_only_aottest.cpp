@@ -9,7 +9,8 @@
 #endif
 
 #include "gpu_only.h"
-#include "static_image.h"
+#include "halide_image.h"
+using namespace Halide::Tools;
 
 int main(int argc, char **argv) {
 #if defined(TEST_OPENCL) || defined(TEST_CUDA)
@@ -33,7 +34,7 @@ int main(int argc, char **argv) {
 
     // Create buffer_ts without host pointers.
     buffer_t input_no_host = *((buffer_t *)input);
-    input_no_host.host = NULL;
+    input_no_host.host = nullptr;
 
     buffer_t output_no_host = *((buffer_t *)output);
     // We need a fake pointer here to trick Halide into creating the
@@ -45,7 +46,7 @@ int main(int argc, char **argv) {
 
     // Restore the host pointer and copy to host.
     output_no_host.host = (uint8_t *)output.data();
-    halide_copy_to_host(NULL, &output_no_host);
+    halide_copy_to_host(nullptr, &output_no_host);
 
     // Verify output.
     for (int y = 0; y < H; y++) {

@@ -4,8 +4,6 @@
 
 #include "HalideRuntime.h"
 
-// TODO: use custom version to test use of user-created OpenGL context.
-extern "C" int halide_opengl_create_context();
 
 class Image {
 public:
@@ -50,7 +48,7 @@ void test_blur() {
     Image output(W, H, C, sizeof(uint8_t), Image::Planar);
 
     fprintf(stderr, "test_blur\n");
-    blur_filter(&input.buf, &output.buf);
+    blur(&input.buf, &output.buf);
     fprintf(stderr, "test_blur complete\n");
 }
 
@@ -60,15 +58,11 @@ void test_ycc() {
     Image output(W, H, C, sizeof(uint8_t), Image::Planar);
 
     fprintf(stderr, "test_ycc\n");
-    ycc_filter(&input.buf, &output.buf);
+    ycc(&input.buf, &output.buf);
     fprintf(stderr, "Ycc complete\n");
 }
 
 int main(int argc, char* argv[]) {
-    if (halide_opengl_create_context() != 0) {
-	fprintf(stderr, "Could not create OpenGL context\n");
-        exit(1);
-    }
     test_blur();
     test_ycc();
 }

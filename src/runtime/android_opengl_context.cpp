@@ -1,5 +1,5 @@
-#include "runtime_internal.h"
 #include "HalideRuntime.h"
+#include "printer.h"
 
 extern "C" {
 
@@ -106,7 +106,7 @@ WEAK int halide_opengl_create_context(void *user_context) {
     return 0;
 }
 
-void *halide_opengl_get_proc_address(void *user_context, const char *name) {
+WEAK void *halide_opengl_get_proc_address(void *user_context, const char *name) {
     return (void*)eglGetProcAddress(name);
 }
 

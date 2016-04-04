@@ -18,6 +18,13 @@ extern "C" void halide_print(void *user_context, const char *message) {
 #endif
 
 int main(int argc, char **argv) {
+    if (get_jit_target_from_environment().has_feature(Target::Profile)) {
+        // The profiler adds lots of extra prints, so counting the
+        // number of prints is not useful.
+        printf("Skipping test because profiler is active\n");
+        return 0;
+    }
+
     Var x;
 
     {
@@ -35,11 +42,11 @@ int main(int argc, char **argv) {
 
         assert(messages.size() == 10);
         for (size_t i = 0; i < messages.size(); i++) {
-            long long square;
+            long square;
             float forty_two;
-            unsigned long long one_forty_five;
+            unsigned long one_forty_five;
 
-            int scan_count = sscanf(messages[i].c_str(), "%lld the answer is %f unsigned %llu",
+            int scan_count = sscanf(messages[i].c_str(), "%ld the answer is %f unsigned %lu",
                                     &square, &forty_two, &one_forty_five);
             assert(scan_count == 3);
             assert(square == static_cast<long long>(i * i));
@@ -67,11 +74,11 @@ int main(int argc, char **argv) {
         }
 
         assert(messages.size() == 1);
-        long long nine;
+        long nine;
         float forty_two;
-        long long p;
+        long p;
 
-        int scan_count = sscanf(messages[0].c_str(), "%lld g %f %%s %lld",
+        int scan_count = sscanf(messages[0].c_str(), "%ld g %f %%s %ld",
                                 &nine, &forty_two, &p);
         assert(scan_count == 3);
         assert(nine == 9);
@@ -116,14 +123,14 @@ int main(int argc, char **argv) {
     // Check that Halide's stringification of floats and doubles
     // matches %f and %e respectively.
 
-    #ifndef _MSC_VER
+    #ifndef _WIN32
     // msvc's library has different ideas about how %f and %e should come out.
     {
         Func f, g;
 
         const int N = 1000000;
 
-        Expr e = reinterpret(Float(32), random_int());
+        Expr e = reinterpret(Float(32), random_uint());
         // Make sure we cover some special values.
         e = select(x == 0, 0.0f,
                    x == 1, -0.0f,
@@ -138,6 +145,7 @@ int main(int argc, char **argv) {
                    x == 8, -std::numeric_limits<float>::min(),
                    x == 9, std::numeric_limits<float>::max(),
                    x == 10, -std::numeric_limits<float>::max(),
+                   x == 11, 1.0f - 1.0f / (1 << 22),
                    e);
 
         f(x) = print(e);
@@ -162,7 +170,7 @@ int main(int argc, char **argv) {
 
         messages.clear();
 
-        g(x) = print(reinterpret(Float(64), (cast<uint64_t>(random_int()) << 32) | random_int()));
+        g(x) = print(reinterpret(Float(64), (cast<uint64_t>(random_uint()) << 32) | random_uint()));
         g.set_custom_print(halide_print);
         Image<double> img = g.realize(N);
 
