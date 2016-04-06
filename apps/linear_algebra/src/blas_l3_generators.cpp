@@ -25,12 +25,12 @@ class GEMMGenerator :
     Param<T>   b_ = {"b", 1.0};
     ImageParam C_ = {type_of<T>(), 2, "C"};
 
-    Var i, j, ii, ji, jii, io, jo, ti, tj, t;
+    Var i{"i"}, j{"j"}, ii{"ii"}, ji{"ji"}, jii{"jii"}, io{"io"}, jo{"jo"}, ti{"ti"}, tj{"tj"}, t{"t"};
 
     Func build() {
-        const Expr num_rows = (A_.width()/32)*32;
-        const Expr num_cols = (B_.height()/32)*32;
-        const Expr sum_size = (A_.height()/32)*32;
+        const Expr num_rows = A_.width();
+        const Expr num_cols = B_.height();
+        const Expr sum_size = A_.height();
 
         const int vec = natural_vector_size(a_.type());
         const int s = vec * 2;
@@ -81,16 +81,16 @@ class GEMMGenerator :
         // Do the part that makes it a 'general' matrix multiply.
         result(i, j) = (a_ * ABt(i, j) + b_ * C_(i, j));
 
+        result.tile(i, j, ti[0], tj[0], i, j, s*2, s*2, TailStrategy::GuardWithIf);
         if (transpose_AB) {
             result
                 .tile(i, j, ii, ji, 4, s).vectorize(ii).unroll(ji)
-                .tile(i, j, ti[0], tj[0], i, j, s/4, 1);
+                .tile(i, j, ti[1], tj[1], i, j, s/4, 1);
         } else {
             result
                 .tile(i, j, ii, ji, s, 4).vectorize(ii).unroll(ji)
-                .tile(i, j, ti[0], tj[0], i, j, 1, s/4);
+                .tile(i, j, ti[1], tj[1], i, j, 1, s/4);
         }
-        result.tile(ti[0], tj[0], ti[0], tj[0], ti[1], tj[1], 2, 2);
 
         // If we have enough work per task, parallelize over these tiles.
         result.specialize(num_rows >= 256 && num_cols >= 256)
@@ -99,7 +99,7 @@ class GEMMGenerator :
         // Otherwise tile one more time before parallelizing, or don't
         // parallelize at all.
         result.specialize(num_rows >= 128 && num_cols >= 128)
-            .tile(ti[0], tj[0], ti[0], tj[0], ti[2], tj[2], 2, 2)
+            .tile(ti[0], tj[0], ti[0], tj[0], ti[2], tj[2], 2, 2, TailStrategy::GuardWithIf)
             .fuse(tj[0], ti[0], t).parallel(t);
 
         result.bound(i, 0, num_rows).bound(j, 0, num_cols);
@@ -113,12 +113,20 @@ class GEMMGenerator :
             .vectorize(i).unroll(j);
 
         AB.compute_at(result, i)
+            .bound(i, Expr(), s)
+            .bound(j, Expr(), 4)
             .unroll(j).vectorize(i)
             .update()
-            .reorder(i, j, rv).unroll(j).unroll(rv, 2).vectorize(i);
+            .reorder(i, j, rv)
+            .unroll(j)
+            .unroll(rv, 2)
+            .vectorize(i);
 
         if (transpose_AB) {
-            ABt.compute_at(result, i).unroll(i).vectorize(j);
+            ABt.compute_at(result, i)
+                .bound(i, Expr(), 4)
+                .bound(j, Expr(), s)
+                .unroll(i).vectorize(j);
         }
 
         A_.set_min(0, 0).set_min(1, 0);

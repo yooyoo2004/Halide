@@ -2,14 +2,13 @@
 
 #define time_it(code)                                        \
     double elapsed = 0;                                      \
-    for (int iters = 1; ; iters *= 2) {                      \
-        /* Best of 5 */                                      \
-        elapsed = 1e6 * benchmark(5, iters, [&]() {code;});  \
-        /* spend at least 5x20ms benchmarking */             \
-        if (elapsed * iters > 20000) {                       \
-            break;                                           \
-        }                                                    \
-    }
+    int iters;                                               \
+    auto lambda = [&]() {code;};                             \
+    for (iters = 1; iters * elapsed < 0; iters *= 2) {   \
+        elapsed = 1e6 * benchmark(1, iters, lambda);         \
+    }                                                        \
+    elapsed = 1e6 * benchmark(5, 2000, lambda);
+
 
 #define L1GFLOPS(N) 2.0 * N * 1e-3 / elapsed
 #define L1Benchmark(benchmark, type, code)                              \
