@@ -65,7 +65,8 @@ class VectorizeLoops : public IRMutator {
             if (scalarized) {
                 // When we're scalarized, we were supposed to hide all
                 // the vector vars in scope.
-                internal_assert(expr.type().is_scalar());
+                internal_assert(expr.type().is_scalar())
+                    << "Encountered vector var in scope inside scalarized code: " << op->name << ": " << expr << "\n";
             }
         }
 
@@ -165,7 +166,7 @@ class VectorizeLoops : public IRMutator {
                     // dimension variable inside the shuffled expression
                     Expr shuffled_expr = op->args[0];
 
-                    bool has_scalarized_expr = expr_uses_var(shuffled_expr,var);
+                    bool has_scalarized_expr = expr_uses_var(shuffled_expr, var);
                     if (has_scalarized_expr) {
                         shuffled_expr = scalarize(op);
                     }
@@ -306,8 +307,10 @@ class VectorizeLoops : public IRMutator {
             Expr mutated_value = mutate(op->value);
 
             // Check if the value was vectorized by this mutator.
-            bool was_vectorized = !op->value.type().is_vector() &&
-            mutated_value.type().is_vector();
+            bool was_vectorized = (!op->value.type().is_vector() &&
+                                   mutated_value.type().is_vector());
+
+            internal_assert(!(scalarized && was_vectorized));
 
             std::string vectorized_name;
 
@@ -519,9 +522,13 @@ class VectorizeLoops : public IRMutator {
                 // Hide all the vectors in scope with a scalar version
                 // in the appropriate lane.
                 for (Scope<Expr>::iterator iter = scope.begin(); iter != scope.end(); ++iter) {
-                    string name = iter.name() + ".lane." + std::to_string(i);
+                    string old_name = iter.name();
+                    assert(ends_with(old_name, widening_suffix));
+                    old_name = old_name.substr(0, old_name.size() - widening_suffix.size());
+                    string name = old_name + ".lane." + std::to_string(i);
                     Expr lane = extract_lane(iter.value(), i);
-                    new_stmt = substitute(iter.name(), Variable::make(lane.type(), name), new_stmt);
+
+                    new_stmt = substitute(old_name, Variable::make(lane.type(), name), new_stmt);
                     new_stmt = LetStmt::make(name, lane, new_stmt);
                 }
 
@@ -567,9 +574,13 @@ class VectorizeLoops : public IRMutator {
                 // Hide all the vector let values in scope with a scalar version
                 // in the appropriate lane.
                 for (Scope<Expr>::iterator iter = scope.begin(); iter != scope.end(); ++iter) {
-                    string name = iter.name() + ".lane." + std::to_string(i);
+                    string old_name = iter.name();
+                    assert(ends_with(old_name, widening_suffix));
+                    old_name = old_name.substr(0, old_name.size() - widening_suffix.size());
+                    string name = old_name + ".lane." + std::to_string(i);
                     Expr lane = extract_lane(iter.value(), i);
-                    new_expr = substitute(iter.name(), Variable::make(lane.type(), name), new_expr);
+
+                    new_expr = substitute(old_name, Variable::make(lane.type(), name), new_expr);
                     new_expr = Let::make(name, lane, new_expr);
                 }
 
