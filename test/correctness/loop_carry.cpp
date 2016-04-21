@@ -1,8 +1,7 @@
 #include "Halide.h"
 
-#include "../performance/benchmark.h"
-
 using namespace Halide;
+using namespace Halide::Internal;
 
 void dump_asm(Func f) {
     Target t;
@@ -10,19 +9,116 @@ void dump_asm(Func f) {
     f.compile_to_assembly("/dev/stdout", {}, t);
 }
 
+class Stats : public IRVisitor {
+
+    using IRVisitor::visit;
+
+    std::set<std::string> scratch_bufs;
+    void visit(const Allocate *op) {
+        const int64_t *const_extent = op->extents.size() == 1 ? as_const_int(op->extents[0]) : nullptr;
+        if (op->name[0] == 'c' && const_extent) {
+            scratch_allocs++;
+            scratch_bytes += (int)(*const_extent) * op->type.bytes();
+            scratch_bufs.insert(op->name);
+            IRVisitor::visit(op);
+            scratch_bufs.erase(op->name);
+        } else {
+            IRVisitor::visit(op);
+        }
+    }
+
+    bool record_loads = false;
+    void visit(const Load *op) {
+        if (record_loads) {
+            if (scratch_bufs.count(op->name)) {
+                scratch_loads++;
+            } else {
+                new_loads++;
+            }
+        }
+        IRVisitor::visit(op);
+    }
+
+    void visit(const For *op) {
+        if (op->name == var) {
+            record_loads = true;
+            IRVisitor::visit(op);
+            record_loads = false;
+        } else {
+            IRVisitor::visit(op);
+        }
+    }
+
+public:
+    std::string var;
+    int new_loads = 0;
+    int scratch_loads = 0;
+    int scratch_allocs = 0;
+    int scratch_bytes = 0;
+};
+
+void validate(Func f, int new_loads, int scratch_loads, int scratch_allocs, int scratch_bytes) {
+    Module m = f.compile_to_module({});
+    // If loop carry is not enabled for this target, run it manually:
+    m.functions[0].body = loop_carry(m.functions[0].body);
+    Stats stats;
+    stats.var = f.name() + ".s0." + f.args()[0].name();
+    m.functions[0].body.accept(&stats);
+    if (stats.new_loads != new_loads ||
+        stats.scratch_loads != scratch_loads ||
+        stats.scratch_allocs != scratch_allocs ||
+        stats.scratch_bytes != scratch_bytes) {
+        std::cerr << m.functions[0].body
+                  << "Expected vs actual:\n"
+                  << "  non-scratch loads: " << new_loads << " vs " << stats.new_loads << "\n"
+                  << "  scratch loads: " << scratch_loads << " vs " << stats.scratch_loads << "\n"
+                  << "  scratch allocs: " << scratch_allocs << " vs " << stats.scratch_allocs << "\n"
+                  << "  scratch bytes: " << scratch_bytes << " vs " << stats.scratch_bytes << "\n";
+        exit(-1);
+    }
+}
+
+template<typename T>
+void check_equal(Image<T> im1, Image<T> im2) {
+    for (int y = 0; y < im1.height(); y++) {
+        for (int x = 0; x < im1.width(); x++) {
+            if (im1(x, y) != im2(x, y)) {
+                std::cerr << "At " << x << ", " << y
+                          << " im1 = " << im1(x, y)
+                          << " im2 = " << im2(x, y) << "\n";
+                exit(-1);
+            }
+        }
+    }
+}
+
+template<typename T>
+void check_equal(Func f1, Func f2) {
+    Image<T> im1 = f1.realize(100, 100);
+    Image<T> im2 = f2.realize(100, 100);
+    check_equal(im1, im2);
+}
+
 int main(int argc, char **argv) {
     {
         Func f, g;
         Var x, y;
-        f(x, y) = x + y;
-        f.compute_root();
+        f(x, y) = x % 17 + y % 3;
         g(x, y) = f(x-1, y) + f(x, y) + f(x+1, y);
 
-        g.realize(100, 100);
+        f.compute_root();
+        validate(g, 1, 5, 1, 4*3);
+
+        Func ref_f, ref_g;
+        ref_f(x, y) = x % 17 + y % 3;
+        ref_g(x, y) = ref_f(x-1, y) + ref_f(x, y) + ref_f(x+1, y);
+
+        check_equal<int>(g, ref_g);
     }
 
 
     {
+        // Check it works with whole vectors
         Func f, g;
         Var x, y;
         f(x, y) = x + y;
@@ -43,8 +139,6 @@ int main(int argc, char **argv) {
 
         f.compute_root();
         h.compute_at(g, x);
-
-        dump_asm(g);
 
         g.realize(100, 100);
     }
@@ -149,13 +243,7 @@ int main(int argc, char **argv) {
 
         h.bound(c, 0, 4).vectorize(c);
 
-        dump_asm(h);
-
         h.realize(4, 100, 100);
-
-        Image<int> out(4, 1000, 1000);
-        double t = benchmark(10, 10, [&]{h.realize(out);});
-        printf("%f\n", t);
     }
 
     if (get_jit_target_from_environment().has_gpu_feature()) {
