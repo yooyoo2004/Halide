@@ -39,7 +39,7 @@ int main(int argc, char *argv[]) {
     }
     h.set_custom_print(halide_print);
 
-    h.realize(256);
+    h.realize(256, target);
 
     int ret = validate_gpu_object_lifetime(true /* allow_globals */, true /* allow_none */, 1 /* max_globals */);
     if (ret != 0) {
