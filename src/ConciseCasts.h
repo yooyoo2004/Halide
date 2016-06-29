@@ -39,6 +39,13 @@ inline Expr i8(Expr e) {
     return cast(Int(8, e.type().lanes()), e);
 }
 
+/** A helper for the unusual case of casting to signed 1-bit
+ * integers. Used as an intermediate type to sign-extend bools
+ * (which are u1). */
+inline Expr i1(Expr e) {
+    return cast(Int(1, e.type().lanes()), e);
+}
+
 inline Expr u64(Expr e) {
     return cast(UInt(64, e.type().lanes()), e);
 }
@@ -53,6 +60,10 @@ inline Expr u16(Expr e) {
 
 inline Expr u8(Expr e) {
     return cast(UInt(8, e.type().lanes()), e);
+}
+
+inline Expr u1(Expr e) {
+    return cast(UInt(1, e.type().lanes()), e);
 }
 
 inline Expr i8_sat(Expr e) {

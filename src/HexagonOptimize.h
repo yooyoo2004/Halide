@@ -21,6 +21,10 @@ EXPORT Stmt optimize_hexagon_shuffles(Stmt s);
  * interleaving/deinterleaving. */
 EXPORT Stmt optimize_hexagon_instructions(Stmt s);
 
+/** Convert all vector comparisons to == and >, which are the ones
+ * hexagon natively supports. */
+EXPORT Stmt normalize_hexagon_comparisons(Stmt s);
+
 /** Generate deinterleave or interleave operations, operating on
  * groups of vectors at a time. */
 //@{

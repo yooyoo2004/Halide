@@ -154,6 +154,10 @@ void CodeGen_Hexagon::compile_func(const LoweredFunc &f,
     body = simplify(body);
     debug(2) << "Lowering after forwarding stores:\n" << body << "\n\n";
 
+    debug(1) << "Converting all vector comparisons to == or > ...\n";
+    body = normalize_hexagon_comparisons(body);
+    debug(2) << "Lowering after normalizing vector comparisons: " << body << "\n\n";
+
     // We can't deal with bool vectors, convert them to integer vectors.
     debug(1) << "Eliminating boolean vectors from Hexagon code...\n";
     body = eliminate_bool_vectors(body);
@@ -1422,62 +1426,39 @@ void CodeGen_Hexagon::visit(const Select *op) {
 }
 
 void CodeGen_Hexagon::visit(const GT *op) {
-    if (op->type.is_vector()) {
-        value = call_intrin(eliminated_bool_type(op->type, op->a.type()),
-                            "halide.hexagon.gt" + type_suffix(op->a, op->b),
-                            {op->a, op->b});
-    } else {
-        CodeGen_Posix::visit(op);
-    }
+    internal_assert(op->type.is_scalar())
+        << "Should have handled vector comparisons in HexagonOptimize\n";
+    CodeGen_Posix::visit(op);
 }
 
 void CodeGen_Hexagon::visit(const EQ *op) {
-    if (op->type.is_vector()) {
-        value = call_intrin(eliminated_bool_type(op->type, op->a.type()),
-                            "halide.hexagon.eq" + type_suffix(op->a, op->b, false),
-                            {op->a, op->b});
-    } else {
-        CodeGen_Posix::visit(op);
-    }
+    internal_assert(op->type.is_scalar())
+        << "Should have handled vector comparisons in HexagonOptimize\n";
+    CodeGen_Posix::visit(op);
 }
 
 void CodeGen_Hexagon::visit(const GE *op) {
-    if (op->type.is_vector()) {
-        Expr ge = Not::make(GT::make(op->b, op->a));
-        ge = eliminate_bool_vectors(ge);
-        ge.accept(this);
-    } else {
-        CodeGen_Posix::visit(op);
-    }
+    internal_assert(op->type.is_scalar())
+        << "Should have handled vector comparisons in HexagonOptimize\n";
+    CodeGen_Posix::visit(op);
 }
 
 void CodeGen_Hexagon::visit(const LE *op) {
-    if (op->type.is_vector()) {
-        Expr le = Not::make(GT::make(op->a, op->b));
-        le = eliminate_bool_vectors(le);
-        le.accept(this);
-    } else {
-        CodeGen_Posix::visit(op);
-    }
+    internal_assert(op->type.is_scalar())
+        << "Should have handled vector comparisons in HexagonOptimize\n";
+    CodeGen_Posix::visit(op);
 }
 
 void CodeGen_Hexagon::visit(const LT *op) {
-    if (op->type.is_vector()) {
-        Expr lt = GT::make(op->b, op->a);
-        lt.accept(this);
-    } else {
-        CodeGen_Posix::visit(op);
-    }
+    internal_assert(op->type.is_scalar())
+        << "Should have handled vector comparisons in HexagonOptimize\n";
+    CodeGen_Posix::visit(op);
 }
 
 void CodeGen_Hexagon::visit(const NE *op) {
-    if (op->type.is_vector()) {
-        Expr eq = Not::make(EQ::make(op->a, op->b));
-        eq = eliminate_bool_vectors(eq);
-        eq.accept(this);
-    } else {
-        CodeGen_Posix::visit(op);
-    }
+    internal_assert(op->type.is_scalar())
+        << "Should have handled vector comparisons in HexagonOptimize\n";
+    CodeGen_Posix::visit(op);
 }
 
 }}

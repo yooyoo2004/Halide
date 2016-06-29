@@ -503,6 +503,20 @@ private:
             { "halide.hexagon.sxt.vb", i16(wild_i8x), Pattern::InterleaveResult },
             { "halide.hexagon.sxt.vh", u32(wild_i16x), Pattern::InterleaveResult },
             { "halide.hexagon.sxt.vh", i32(wild_i16x), Pattern::InterleaveResult },
+
+            // Sign-extensions of comparisons (produced by EliminateBoolVectors)
+            { "halide.hexagon.gt.vub.vub", i8(i1(wild_u8x > wild_u8x)) },
+            { "halide.hexagon.gt.vuh.vuh", i16(i1(wild_u16x > wild_u16x)) },
+            { "halide.hexagon.gt.vuw.vuw", i32(i1(wild_u32x > wild_u32x)) },
+            { "halide.hexagon.gt.vb.vb",   i8(i1(wild_i8x > wild_i8x)) },
+            { "halide.hexagon.gt.vh.vh",   i16(i1(wild_i16x > wild_i16x)) },
+            { "halide.hexagon.gt.vw.vw",   i32(i1(wild_i32x > wild_i32x)) },
+            { "halide.hexagon.eq.vb.vb",   i8(i1(wild_u8x == wild_u8x)) },
+            { "halide.hexagon.eq.vh.vh",   i16(i1(wild_u16x == wild_u16x)) },
+            { "halide.hexagon.eq.vw.vw",   i32(i1(wild_u32x == wild_u32x)) },
+            { "halide.hexagon.eq.vb.vb",   i8(i1(wild_i8x == wild_i8x)) },
+            { "halide.hexagon.eq.vh.vh",   i16(i1(wild_i16x == wild_i16x)) },
+            { "halide.hexagon.eq.vw.vw",   i32(i1(wild_i32x == wild_i32x)) },
         };
 
 
@@ -1049,6 +1063,42 @@ class OptimizeShuffles : public IRMutator {
     }
 };
 
+class NormalizeComparisons : public IRMutator {
+    using IRMutator::visit;
+
+    void visit(const LT *op) {
+        if (op->type.is_vector()) {
+            expr = mutate(op->b) > mutate(op->a);
+        } else {
+            expr = op;
+        }
+    }
+
+    void visit(const LE *op) {
+        if (op->type.is_vector()) {
+            expr = !(mutate(op->a) > mutate(op->b));
+        } else {
+            expr = op;
+        }
+    }
+
+    void visit(const GE *op) {
+        if (op->type.is_vector()) {
+            expr = !(mutate(op->b) > mutate(op->a));
+        } else {
+            expr = op;
+        }
+    }
+
+    void visit(const NE *op) {
+        if (op->type.is_vector()) {
+            expr = !(mutate(op->a) == mutate(op->b));
+        } else {
+            expr = op;
+        }
+    }
+};
+
 }  // namespace
 
 Stmt optimize_hexagon_shuffles(Stmt s) {
@@ -1072,6 +1122,11 @@ Stmt optimize_hexagon_instructions(Stmt s) {
 
     return s;
 }
+
+Stmt normalize_hexagon_comparisons(Stmt s) {
+    return NormalizeComparisons().mutate(s);
+}
+
 
 }  // namespace Internal
 }  // namespace Halide

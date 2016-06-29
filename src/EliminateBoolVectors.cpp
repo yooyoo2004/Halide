@@ -48,10 +48,12 @@ private:
         }
 
         if (t.lanes() > 1) {
-            // To represent bool vectors, OpenCL uses vectors of signed
-            // integers with the same width as the types being compared.
+            // To represent bool vectors, OpenCL uses vectors of
+            // signed integers with the same width as the types being
+            // compared. We represent that by sign-extending the
+            // comparison result to the width of the args.
             t = t.with_code(Type::Int);
-            expr = Cast::make(t, expr);
+            expr = Cast::make(t, Cast::make(t.with_bits(1), expr));
         }
     }
 
