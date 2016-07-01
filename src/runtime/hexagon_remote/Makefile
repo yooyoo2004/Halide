@@ -109,13 +109,13 @@ bin/%/halide_host.o: halide_host.cpp
 	$(CXX-$*) $(CCFLAGS-$*) -fPIC -c halide_host.cpp -o $@
 
 # Build rules for the hexagon implementation.
-bin/%/libhalide_hexagon_remote_skel.so: bin/%/halide_remote.o bin/%/halide_hexagon_remote_skel.o bin/%/thread_pool.o
+bin/%/libhalide_hexagon_remote_skel.so: bin/%/halide_remote.o bin/%/halide_hexagon_remote_skel.o
 	mkdir -p $(@D)
 	$(CC-$*) -m$* -O0 -mG0lib -G0 -fpic -shared -lc -o $@ \
 	    -Wl,-Bsymbolic -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free \
 	    -Wl,--wrap=realloc -Wl,--wrap=memalign -Wl,--wrap=__stack_chk_fail \
 	    -Wl,-soname=libhalide_hexagon_remote_skel.so \
-	    -Wl,--start-group  bin/$*/halide_remote.o bin/$*/thread_pool.o bin/$*/halide_hexagon_remote_skel.o -Wl,--end-group
+	    -Wl,--start-group  bin/$*/halide_remote.o bin/$*/halide_hexagon_remote_skel.o -Wl,--end-group
 
 bin/%/libhalide_hexagon_host.so: bin/src/halide_hexagon_remote_stub.c bin/%/halide_host.o
 	mkdir -p $(@D)
