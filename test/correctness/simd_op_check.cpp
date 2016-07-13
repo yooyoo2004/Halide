@@ -1394,6 +1394,10 @@ void check_hvx_all() {
     check("vnavg(v*.h,v*.h)", hvx_width/2, i16_sat((i32(i16_1) - i32(i16_2))/2));
     check("vnavg(v*.w,v*.w)", hvx_width/4, i32_sat((i64(i32_1) - i64(i32_2))/2));
 
+    check("v*.uh += vmpy(v*.ub,r*.ub)", hvx_width/1, u16_1 + u16(u8_1));
+    check("v*.h += vmpy(v*.ub,r*.b)", hvx_width/1, i16_1 + i16(u8_1));
+    check("v*.uw += vmpy(v*.uh,r*.uh)", hvx_width/2, u32_1 + u32(u16_1));
+
     // The behavior of shifts larger than the type behave differently
     // on HVX vs. the scalar processor, so we clamp.
     check("vlsr(v*.h,v*.h)", hvx_width/1, u8_1 >> (u8_2 % 8));

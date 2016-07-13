@@ -132,6 +132,8 @@ struct Pattern {
         NarrowUnsignedOp2 = 1 << 17,
         NarrowUnsignedOps = NarrowUnsignedOp0 | NarrowUnsignedOp1 | NarrowUnsignedOp2,
 
+        Append1b = 1 << 20,  // Append an int8 with a value of 1 to the arguments of the intrnisic.
+        Append1h = 1 << 21,  // Append an int16 with a vaule of 1 to the arguments of the intrinsic.
    };
 
     string intrin;        // Name of the intrinsic
@@ -215,10 +217,18 @@ Expr apply_patterns(Expr x, const vector<Pattern> &patterns, IRMutator *op_mutat
                 internal_assert(matches.size() >= 3);
                 std::swap(matches[1], matches[2]);
             }
+
             // Mutate the operands with the given mutator.
             for (Expr &op : matches) {
                 op = op_mutator->mutate(op);
             }
+
+            if (p.flags & Pattern::Append1b) {
+                matches.push_back(make_one(Int(8)));
+            } else if (p.flags & Pattern::Append1h) {
+                matches.push_back(make_one(Int(16)));
+            }
+
             x = Call::make(x.type(), p.intrin, matches, Call::PureExtern);
             if (p.flags & Pattern::InterleaveResult) {
                 // The pattern wants us to interleave the result.
@@ -373,8 +383,13 @@ private:
             { "halide.hexagon.add_mpy.vh.vub.vb",   wild_i16x + wild_i16x*wild_i16x, Pattern::ReinterleaveOp0 | Pattern::NarrowOp1 | Pattern::NarrowUnsignedOp2 | Pattern::SwapOps12 },
             { "halide.hexagon.add_mpy.vw.vh.vuh",   wild_i32x + wild_i32x*wild_i32x, Pattern::ReinterleaveOp0 | Pattern::NarrowUnsignedOp1 | Pattern::NarrowOp2 | Pattern::SwapOps12 },
 
-            // This pattern is very general, so it must come last.
+            // This pattern is very general, so it must come last among multiply-accumulates.
             { "halide.hexagon.add_mul.vh.vh.vh", wild_i16x + wild_i16x*wild_i16x },
+
+            // Widening adds use multiply-adds, with a constant multiplier of 1.
+            { "halide.hexagon.add_mpy.vuh.vub.ub", wild_u16x + wild_u16x, Pattern::ReinterleaveOp0 | Pattern::NarrowOp1 | Pattern::Append1b },
+            { "halide.hexagon.add_mpy.vh.vub.b", wild_i16x + wild_i16x, Pattern::ReinterleaveOp0 | Pattern::NarrowUnsignedOp1 | Pattern::Append1b },
+            { "halide.hexagon.add_mpy.vuw.vuh.uh", wild_u32x + wild_u32x, Pattern::ReinterleaveOp0 | Pattern::NarrowOp1 | Pattern::Append1h },
         };
 
         if (op->type.is_vector()) {
