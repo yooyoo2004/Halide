@@ -513,6 +513,7 @@ struct Call : public ExprNode<Call> {
         buffer_set_host_dirty,
         buffer_set_dev_dirty,
         buffer_init,
+        buffer_init_subregion_from_buffer,
         trace;
 
     // If it's a call to another halide function, this call node holds

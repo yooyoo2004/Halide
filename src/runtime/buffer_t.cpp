@@ -24,7 +24,7 @@ __attribute__((always_inline, weak))
 int _halide_buffer_get_max(const buffer_t *buf, int d) {
     return buf->min[d] + buf->extent[d] - 1;
 }
-    
+
 __attribute__((always_inline, weak))
 int _halide_buffer_set_host_dirty(buffer_t *buf, bool val) {
     buf->host_dirty = val;
@@ -35,7 +35,7 @@ __attribute__((always_inline, weak))
 int _halide_buffer_set_dev_dirty(buffer_t *buf, bool val) {
     buf->dev_dirty = val;
     return 0;
-}    
+}
 
 __attribute__((always_inline, weak))
 buffer_t *_halide_buffer_init(buffer_t *dst, uint8_t *host, uint64_t dev, int /*type_code*/, int type_bits, int dimensions,
@@ -48,7 +48,7 @@ buffer_t *_halide_buffer_init(buffer_t *dst, uint8_t *host, uint64_t dev, int /*
     for (int i = 0; i < dimensions; i++) {
         dst->min[i] = min[i];
         dst->extent[i] = extent[i];
-        dst->stride[i] = stride[i];                
+        dst->stride[i] = stride[i];
     }
     for (int i = dimensions; i < 4; i++) {
         dst->min[i] = 0;
@@ -57,5 +57,26 @@ buffer_t *_halide_buffer_init(buffer_t *dst, uint8_t *host, uint64_t dev, int /*
     }
     return dst;
 }
-    
+
+__attribute__((always_inline, weak))
+buffer_t *_halide_buffer_init_subregion_from_buffer(buffer_t *dst, int dimensions,
+                                                    const int *min, buffer_t *src) {
+    dst->host = src->host;
+    dst->dev = src->dev;
+    dst->elem_size = src->elem_size;
+    dst->host_dirty = src->host_dirty;
+    dst->dev_dirty = src->dev_dirty;
+    for (int i = 0; i < dimensions; i++) {
+        dst->min[i] = min[i];
+        dst->extent[i] = 0;
+        dst->stride[i] = 0;
+    }
+    for (int i = dimensions; i < 4; i++) {
+        dst->min[i] = 0;
+        dst->extent[i] = 0;
+        dst->stride[i] = 0;
+    }
+    return dst;
+}
+
 }
