@@ -1,8 +1,6 @@
 #include "Halide.h"
-#include "stubtest.stub.h"
 
 using Halide::Buffer;
-using StubNS1::StubNS2::StubTest;
 
 namespace {
 
@@ -29,50 +27,71 @@ public:
     Output<Buffer<int32_t>> int32_buffer_output{"int32_buffer_output" };
 
     void generate() {
-
         Buffer<uint8_t> constant_image = make_image<uint8_t>();
 
-        // We'll explicitly fill in the struct fields by name, just to show
-        // it as an option. (Alternately, we could fill it in by using
-        // C++11 aggregate-initialization syntax.)
-        StubTest::Inputs inputs;
-        inputs.typed_buffer_input = constant_image;
-        inputs.untyped_buffer_input = input;
-        inputs.simple_input = input;
-        inputs.array_input = { input };
-        inputs.float_arg = 1.234f;
-        inputs.int_arg = { int_arg };
+        // Create an Invoker for the StubTest Generator.
+        invoker = Invoker(this, "stub_test")
+                    // Optionally set GeneratorParams before calling generate(). 
+                    // Bad names and/or incompatible types will assert.
+                    .set_generator_param("untyped_buffer_output_type", int32_buffer_output.type())
+                    // Pass the Inputs, in order, to Invoker's generate() method.
+                    // This sets the Input<> values correctly. If you pass the wrong number of Inputs,
+                    // or the wrong type for a given Input (e.g. int where a float is expected),
+                    // Halide-compile-fail.
+                    .generate(
+                        constant_image,                  // typed_buffer_input
+                        input,                           // untyped_buffer_input
+                        input,                           // simple_input
+                        std::vector<Func>{ input },      // array_input
+                        1.234f,                          // float_arg
+                        std::vector<int>{ int_arg }      // int_arg
+                    );
 
-        StubTest::GeneratorParams gp;
-        gp.untyped_buffer_output_type = int32_buffer_output.type();
+        // Get outputs via index or name. If the output's name or index is
+        // bad, Halide-compile-fail. If the output can't be assigned to the LHS
+        // (e.g. Func f = Output<Func[]>), Halide-compile-fail (or sometimes C++-compile-fail).
+        Func simple_output = invoker[0];                           // or ["simple_output"]
+        Func tuple_output = invoker["tuple_output"];               // or [1]
+        std::vector<Func> array_output = invoker["array_output"];  // or [2]
 
-        stub = StubTest(this, inputs, gp);
+        // TODO: there is no special path for a single-Output coercing without [] usage, e.g.
+        // if "simple_output" was the only Output, we couldn't just do
+        //    Func simple_output = invoker;
+        // but instead we must use
+        //    Func simple_output = invoker[0];  // or ["simple_output"]
+        // We could probably make this work, but IMHO requiring [0] seems minor and 
+        // straightforward. Thoughts/
+
+        // TODO: can't use results directly, e.g.
+        //    Expr f = invoker["simple_output"](x, y, c);       // nope
+        // Of course, an explicit cast would work:
+        //    Expr f = Func(invoker["simple_output"])(x, y, c); // OK
+        // We could add overloads to make this work. Do we want to?
 
         const float kOffset = 2.f;
-        calculated_output(x, y, c) = cast<uint8_t>(stub.tuple_output(x, y, c)[1] + kOffset);
+        calculated_output(x, y, c) = cast<uint8_t>(tuple_output(x, y, c)[1] + kOffset);
 
-        // Stub outputs that are Output<Buffer> (rather than Output<Func>)
-        // can really only be assigned to another Output<Buffer>; this is 
-        // nevertheless useful, as we can still set stride (etc) constraints
-        // on the Output.
-        float32_buffer_output = stub.typed_buffer_output;
-        int32_buffer_output = stub.untyped_buffer_output;
+        // Output<Buffer> (rather than Output<Func>) can only be assigned to 
+        // another Output<Buffer> (or Realized, if JITing); this is useful mainly 
+        // to set stride (etc) constraints on the Output.
+        float32_buffer_output = invoker["typed_buffer_output"];
+        int32_buffer_output = invoker["untyped_buffer_output"];
     }
 
     void schedule() {
-        const bool vectorize = true;
-        stub.schedule({ vectorize, LoopLevel(calculated_output, Var("y")) });
+        invoker
+            // Optionally set ScheduleParams before calling schedule(). 
+            // Bad names and/or incompatible types will assert.
+            .set_schedule_param("vectorize", true)
+            .set_schedule_param("intermediate_level", LoopLevel(calculated_output, Var("y")))
+            .schedule();
     }
 
 private:
     Var x{"x"}, y{"y"}, c{"c"};
-    StubTest stub;
+    Invoker invoker;
 };
 
-// Note that HALIDE_REGISTER_GENERATOR() with just two args is functionally
-// identical to the old Halide::RegisterGenerator<> syntax: no stub being defined,
-// just AOT usage. (If you try to generate a stub for this class you'll
-// fail with an error at generation time.)
 HALIDE_REGISTER_GENERATOR(StubUser, "stubuser")
 
 }  // namespace

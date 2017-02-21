@@ -209,6 +209,7 @@
 namespace Halide {
 
 template<typename T> class Buffer;
+class Invoker;
 
 namespace Internal {
 
@@ -330,10 +331,33 @@ public:
 
 protected:
     friend void ::Halide::Internal::generator_test();
+    friend class ::Halide::Invoker;
     friend class GeneratorBase;
     friend class StubEmitter;
 
     EXPORT void check_value_valid() const;
+
+// TODO: this is horrible. Surely must be a better way to do multimethod dispatch here.
+// Quick-n-dirty to validate look & feel of API for now.
+#define DEFINE_TYPED_SETTER(TYPE) \
+    virtual bool set_from_##TYPE(const TYPE &) { return false; }
+
+    DEFINE_TYPED_SETTER(bool)
+    DEFINE_TYPED_SETTER(int8_t)
+    DEFINE_TYPED_SETTER(int16_t)
+    DEFINE_TYPED_SETTER(int32_t)
+    DEFINE_TYPED_SETTER(int64_t)
+    DEFINE_TYPED_SETTER(uint8_t)
+    DEFINE_TYPED_SETTER(uint16_t)
+    DEFINE_TYPED_SETTER(uint32_t)
+    DEFINE_TYPED_SETTER(uint64_t)
+    DEFINE_TYPED_SETTER(float)
+    DEFINE_TYPED_SETTER(double)
+    DEFINE_TYPED_SETTER(LoopLevel)
+    DEFINE_TYPED_SETTER(Target)
+    DEFINE_TYPED_SETTER(Type)
+
+#undef DEFINE_TYPED_SETTER
 
     virtual void set_from_string(const std::string &value_string) = 0;
     virtual std::string to_string() const = 0;
@@ -387,9 +411,42 @@ public:
 
     virtual void set(const T &new_value) { value_ = new_value; }
 
+// TODO: this is horrible. Surely must be a better way to do multimethod dispatch here.
+// Quick-n-dirty to validate look & feel of API for now.
+#define IMPLEMENT_TYPED_SETTER(TYPE) \
+    bool set_from_##TYPE(const TYPE &t) override { return typed_setter_impl<TYPE>(t); }
+
+    IMPLEMENT_TYPED_SETTER(bool)
+    IMPLEMENT_TYPED_SETTER(int8_t)
+    IMPLEMENT_TYPED_SETTER(int16_t)
+    IMPLEMENT_TYPED_SETTER(int32_t)
+    IMPLEMENT_TYPED_SETTER(int64_t)
+    IMPLEMENT_TYPED_SETTER(uint8_t)
+    IMPLEMENT_TYPED_SETTER(uint16_t)
+    IMPLEMENT_TYPED_SETTER(uint32_t)
+    IMPLEMENT_TYPED_SETTER(uint64_t)
+    IMPLEMENT_TYPED_SETTER(float)
+    IMPLEMENT_TYPED_SETTER(double)
+    IMPLEMENT_TYPED_SETTER(LoopLevel)
+    IMPLEMENT_TYPED_SETTER(Target)
+    IMPLEMENT_TYPED_SETTER(Type)
+
+#undef IMPLEMENT_TYPED_SETTER
+
 protected:
     bool is_looplevel_param() const override {
         return std::is_same<T, LoopLevel>::value;
+    }
+
+    template <typename T2 = T, typename std::enable_if<std::is_same<T, T2>::value>::type * = nullptr>
+    HALIDE_ALWAYS_INLINE bool typed_setter_impl(const T2 &t) {
+        this->set(t);
+        return true;
+    }
+
+    template <typename T2 = T, typename std::enable_if<!std::is_same<T, T2>::value>::type * = nullptr>
+    HALIDE_ALWAYS_INLINE bool typed_setter_impl(const T2 &) {
+        return false;
     }
 
 private:
@@ -893,6 +950,8 @@ decltype(!(T)0) operator!(const GeneratorParam<T> &a) { return !(T)a; }
 
 namespace Internal {
 
+class Returnable;
+
 template<typename T2> class GeneratorInput_Buffer;
 
 enum class IOKind { Scalar, Function, Buffer };
@@ -987,6 +1046,8 @@ template<typename T = void>
 class StubOutputBuffer : public StubOutputBufferBase {
     template<typename T2> friend class GeneratorOutput_Buffer;
     friend class GeneratorStub;
+    friend class Halide::Invoker;
+    friend class Halide::Internal::Returnable;
     explicit StubOutputBuffer(const Func &f, std::shared_ptr<GeneratorBase> generator) : StubOutputBufferBase(f, generator) {}
 public:
     StubOutputBuffer() {}
@@ -1757,6 +1818,7 @@ public:
         const auto &f = stub_output_buffer.f;
         internal_assert(f.defined());
 
+        // TODO(srj): this checking may be redundant to that which we already do elsewhere.
         const auto &output_types = f.output_types();
         user_assert(output_types.size() == 1)
             << "Output should have size=1 but saw size=" << output_types.size() << "\n";
@@ -1903,18 +1965,23 @@ public:
     // TODO: This used to take the buffer as a const ref. This no longer works as
     // using it in a Pipeline might change the dev field so it is currently
     // not considered const. We should consider how this really ought to work.
-    template <typename T2>
+    template <typename T2 = void,
+              typename TBase = typename std::remove_all_extents<T>::type,
+              typename std::enable_if<!std::is_same<TBase, Func>::value>::type * = nullptr>
     GeneratorOutput<T> &operator=(Buffer<T2> &buffer) {
         Super::operator=(buffer);
         return *this;
     }
 
-    template <typename T2>
-    GeneratorOutput<T> &operator=(const Internal::StubOutputBuffer<T2> &stub_output_buffer) {
+    template <typename TBase = typename std::remove_all_extents<T>::type,
+              typename std::enable_if<!std::is_same<TBase, Func>::value>::type * = nullptr>
+    GeneratorOutput<T> &operator=(const Internal::StubOutputBuffer<> &stub_output_buffer) {
         Super::operator=(stub_output_buffer);
         return *this;
     }
 
+    template <typename TBase = typename std::remove_all_extents<T>::type,
+              typename std::enable_if<std::is_same<TBase, Func>::value>::type * = nullptr>
     GeneratorOutput<T> &operator=(const Func &f) {
         Super::operator=(f);
         return *this;
@@ -1976,6 +2043,7 @@ protected:
     using Expr = Halide::Expr;
     using ExternFuncArgument = Halide::ExternFuncArgument;
     using Func = Halide::Func;
+    using Invoker = Halide::Invoker;
     using GeneratorContext = Halide::GeneratorContext;
     using ImageParam = Halide::ImageParam;
     using LoopLevel = Halide::LoopLevel;
@@ -2084,6 +2152,8 @@ private:
     friend class GeneratorStub;
     friend class SimpleGeneratorFactory;
     friend class StubOutputBufferBase;
+    friend class ::Halide::Invoker;
+    friend class ::Halide::Internal::Returnable;
 
     const size_t size;
     std::vector<Internal::Parameter *> filter_params;

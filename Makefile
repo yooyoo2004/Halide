@@ -438,6 +438,7 @@ HEADER_FILES = \
   runtime/HalideBuffer.h \
   ImageParam.h \
   Interval.h \
+  Invoker.h \
   InjectHostDevBufferCopies.h \
   InjectImageIntrinsics.h \
   InjectOpenGLIntrinsics.h \

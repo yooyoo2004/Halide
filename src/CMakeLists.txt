@@ -293,6 +293,7 @@ set(HEADER_FILES
   IntegerDivisionTable.h
   Introspection.h
   IntrusivePtr.h
+  Invoker.h
   JITModule.h
   LLVM_Output.h
   LLVM_Runtime_Linker.h

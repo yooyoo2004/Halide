@@ -1,9 +1,7 @@
 #include "Halide.h"
 
-// Include the machine-generated .stub.h header file.
-#include "example.stub.h"
-
 using Halide::Buffer;
+using Halide::Invoker;
 
 const int kSize = 32;
 
@@ -25,42 +23,34 @@ int main(int argc, char **argv) {
     Halide::JITGeneratorContext context(Halide::get_target_from_environment());
 
     {
-        // Create a Generator and set its Inputs and GeneratorParams.
-        // We could just use initializer-list syntax, but we'll explicitly
-        // set the fields by name for clarity.
-        example::Inputs inputs;
-        inputs.runtime_factor = 1.f;
+        auto example = Invoker(context, "example")
+            // Optionally set GeneratorParams before calling generate().
+            .set_generator_param("compiletime_factor", 2.5f)
+            // You can also use string values.
+            .set_generator_param("enummy", "foo")
+            // Pass the Inputs, in order, to Invoker's generate() method.
+            // This sets the Input<> values correctly. If you pass the wrong number of Inputs,
+            // or the wrong type for a given Input (e.g. int where a float is expected),
+            // Halide-compile-fail.
+            .generate(1.f)
+            // We can go ahead and call schedule now when jitting.
+            .schedule();
 
-        // The fields of the GeneratorParams struct are initialized to the
-        // default values specified in the Generator, so we can just omit
-        // any we don't want to change
-        example::GeneratorParams gp;
-        gp.compiletime_factor = 2.5f;
-        gp.enummy = Enum_enummy::foo;
-        // gp.channels = 3;  -- this is the default; no need to set
-
-        auto gen = example(context, inputs, gp);
-
-        // We must call schedule() before calling realize()
-        gen.schedule();
-
-        Halide::Buffer<int32_t> img = gen.realize(kSize, kSize, 3);
+        Halide::Buffer<int32_t> img = example.realize(kSize, kSize, 3);
         verify(img, 2.5f, 1, 3);
     }
 
     {
-        // Here, we'll use an initializer list for inputs, and omit
-        // the GeneratorParams entirely to use their default values.
-        auto gen = example(context, /* inputs: */ { 1.f });
-
-        // We'll set "vectorize=false" in the ScheduleParams, just to
-        // show that we can:
-        example::ScheduleParams sp;
-        sp.vectorize = false;
-        gen.schedule(sp);
+        // Use defaults for all GeneratorParams.
+        auto example = Invoker(context, "example")
+            .generate(1.f)
+            // We'll set "vectorize=false" in the ScheduleParams, just to
+            // show that we can:
+            .set_schedule_param("vectorize", false)
+            .schedule();
 
         Halide::Buffer<int32_t> img(kSize, kSize, 3);
-        gen.realize(img);
+        example.realize(img);
         verify(img, 1, 1, 3);
     }
 
