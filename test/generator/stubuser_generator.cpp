@@ -30,7 +30,7 @@ public:
         Buffer<uint8_t> constant_image = make_image<uint8_t>();
 
         // Create an Invoker for the StubTest Generator.
-        invoker = Invoker(this, "stub_test")
+        stub = Invoker(this, "stub_test")
                     // Optionally set GeneratorParams before calling generate(). 
                     // Bad names and/or incompatible types will assert.
                     .set_generator_param("untyped_buffer_output_type", int32_buffer_output.type())
@@ -50,22 +50,22 @@ public:
         // Get outputs via index or name. If the output's name or index is
         // bad, Halide-compile-fail. If the output can't be assigned to the LHS
         // (e.g. Func f = Output<Func[]>), Halide-compile-fail (or sometimes C++-compile-fail).
-        Func simple_output = invoker[0];                           // or ["simple_output"]
-        Func tuple_output = invoker["tuple_output"];               // or [1]
-        std::vector<Func> array_output = invoker["array_output"];  // or [2]
+        Func simple_output = stub[0];                           // or ["simple_output"]
+        Func tuple_output = stub["tuple_output"];               // or [1]
+        std::vector<Func> array_output = stub["array_output"];  // or [2]
 
         // TODO: there is no special path for a single-Output coercing without [] usage, e.g.
         // if "simple_output" was the only Output, we couldn't just do
-        //    Func simple_output = invoker;
+        //    Func simple_output = stub;
         // but instead we must use
-        //    Func simple_output = invoker[0];  // or ["simple_output"]
+        //    Func simple_output = stub[0];  // or ["simple_output"]
         // We could probably make this work, but IMHO requiring [0] seems minor and 
         // straightforward. Thoughts/
 
         // TODO: can't use results directly, e.g.
-        //    Expr f = invoker["simple_output"](x, y, c);       // nope
+        //    Expr f = stub["simple_output"](x, y, c);       // nope
         // Of course, an explicit cast would work:
-        //    Expr f = Func(invoker["simple_output"])(x, y, c); // OK
+        //    Expr f = Func(stub["simple_output"])(x, y, c); // OK
         // We could add overloads to make this work. Do we want to?
 
         const float kOffset = 2.f;
@@ -74,12 +74,12 @@ public:
         // Output<Buffer> (rather than Output<Func>) can only be assigned to 
         // another Output<Buffer> (or Realized, if JITing); this is useful mainly 
         // to set stride (etc) constraints on the Output.
-        float32_buffer_output = invoker["typed_buffer_output"];
-        int32_buffer_output = invoker["untyped_buffer_output"];
+        float32_buffer_output = stub["typed_buffer_output"];
+        int32_buffer_output = stub["untyped_buffer_output"];
     }
 
     void schedule() {
-        invoker
+        stub
             // Optionally set ScheduleParams before calling schedule(). 
             // Bad names and/or incompatible types will assert.
             .set_schedule_param("vectorize", true)
@@ -89,7 +89,7 @@ public:
 
 private:
     Var x{"x"}, y{"y"}, c{"c"};
-    Invoker invoker;
+    Invoker stub;
 };
 
 HALIDE_REGISTER_GENERATOR(StubUser, "stubuser")
