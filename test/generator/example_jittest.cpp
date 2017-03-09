@@ -67,6 +67,21 @@ int main(int argc, char **argv) {
         verify(img, 2.5f, 1, 3);
     }
 
+    {
+        // If we don't need to set any GeneratorParams or ScheduleParams,
+        // syntax is just ctor().generate(...).schedule()
+        auto gen = example(context).generate(1.f).schedule();
+        Buffer<int32_t> img = gen.realize(kSize, kSize, 3);
+        verify(img, 1.f, 1, 3);
+    }
+
+    {
+        // (equivalent generic version)
+        auto gen = GeneratorStub(context, "example").generate(1.f).schedule();
+        Buffer<int32_t> img = gen.realize(kSize, kSize, 3);
+        verify(img, 1.f, 1, 3);
+    }
+
     printf("Success!\n");
     return 0;
 }
