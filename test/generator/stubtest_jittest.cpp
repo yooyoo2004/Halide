@@ -2,29 +2,19 @@
 
 #include "stubtest.stub.h"
 
-using Halide::Argument;
-using Halide::Expr;
-using Halide::Func;
-using Halide::Buffer;
-using Halide::JITGeneratorContext;
-using Halide::LoopLevel;
-using Halide::Var;
+using namespace Halide;
 using StubNS1::StubNS2::StubTest;
 
 const int kSize = 32;
 
-Halide::Var x, y, c;
+Var x, y, c;
 
 template<typename Type>
 Buffer<Type> make_image(int extra) {
     Buffer<Type> im(kSize, kSize, 3);
-    for (int x = 0; x < kSize; x++) {
-        for (int y = 0; y < kSize; y++) {
-            for (int c = 0; c < 3; c++) {
-                im(x, y, c) = static_cast<Type>(x + y + c + extra);
-            }
-        }
-    }
+    im.for_each_element([&im, extra](int x, int y, int c) {
+        im(x, y, c) = static_cast<Type>(x + y + c + extra);
+    });
     return im;
 }
 
@@ -53,68 +43,110 @@ void verify(const Buffer<InputType> &input, float float_arg, int int_arg, const 
 int main(int argc, char **argv) {
     constexpr int kArrayCount = 2;
 
+    auto context = JITGeneratorContext(get_target_from_environment());
     Buffer<uint8_t> buffer_input = make_image<uint8_t>(0);
     Buffer<float> simple_input = make_image<float>(0);
     Buffer<float> array_input[kArrayCount] = {
         make_image<float>(0),
         make_image<float>(1)
     };
+    int int_args[2] = { 33, 66 };
 
-    std::vector<int> int_args = { 33, 66 };
+    {
+        // First, let's test using the custom-generated Stub for this Generator.
+        auto gen = StubTest(context);
+        gen.generate(buffer_input,  // typed_buffer_input
+                     buffer_input,  // untyped_buffer_input
+                     Func(simple_input),
+                     { Func(array_input[0]), Func(array_input[1]) },
+                     1.25f,
+                     { int_args[0], int_args[1] });
 
-    // the Stub wants Expr, so make a conversion in place
-    std::vector<Expr> int_args_expr(int_args.begin(), int_args.end());
+        // This generator defaults intermediate_level to "undefined",
+        // so we *must* specify something for it (else we'll crater at
+        // Halide compile time). Since we've called generate(), the outputs in the Stub
+        // are valid, so we can examine them to construct a LoopLevel:
+        Func tuple_output = gen.tuple_output;
+        gen.set_intermediate_level(LoopLevel(tuple_output, tuple_output.args().at(1)));
 
-    auto gen = StubTest(
-        JITGeneratorContext(Halide::get_target_from_environment()),
-        // Use aggregate-initialization syntax to fill in an Inputs struct.
-        {
-            buffer_input,  // typed_buffer_input
-            buffer_input,  // untyped_buffer_input
-            Func(simple_input),
-            { Func(array_input[0]), Func(array_input[1]) },
-            1.25f,
-            int_args_expr
-        });
+        gen.schedule();
 
-    StubTest::ScheduleParams sp;
-    // This generator defaults intermediate_level to "undefined",
-    // so we *must* specify something for it (else we'll crater at
-    // Halide compile time). We'll use this:
-    sp.intermediate_level = LoopLevel(gen.tuple_output, gen.tuple_output.args().at(1));
-    // ...but any of the following would also be OK:
-    // sp.intermediate_level = LoopLevel::root();
-    // sp.intermediate_level = LoopLevel(gen.tuple_output, Var("x"));
-    // sp.intermediate_level = LoopLevel(gen.tuple_output, Var("c"));
-    gen.schedule(sp);
+        Buffer<float> s0 = gen.simple_output.realize(kSize, kSize, 3, gen.get_target());
+        verify(array_input[0], 1.f, 0, s0);
 
-    Halide::Realization simple_output_realized = gen.simple_output.realize(kSize, kSize, 3);
-    Buffer<float> s0 = simple_output_realized;
-    verify(array_input[0], 1.f, 0, s0);
+        Realization f = gen.tuple_output.realize(kSize, kSize, 3, gen.get_target());
+        // Explicitly cast Buffer<> -> Buffer<float> to satisfy verify() type inference
+        Buffer<float> f0 = f[0];
+        Buffer<float> f1 = f[1];
+        verify(array_input[0], 1.25f, 0, f0);
+        verify(array_input[0], 1.25f, 33, f1);
 
-    Halide::Realization tuple_output_realized = gen.tuple_output.realize(kSize, kSize, 3);
-    Buffer<float> f0 = tuple_output_realized[0];
-    Buffer<float> f1 = tuple_output_realized[1];
-    verify(array_input[0], 1.25f, 0, f0);
-    verify(array_input[0], 1.25f, 33, f1);
+        for (int i = 0; i < kArrayCount; ++i) {
+            Func f = gen.array_output[i];
+            Buffer<int16_t> g0 = f.realize(kSize, kSize, gen.get_target());
+            verify(array_input[i], 1.0f, int_args[i], g0);
+        }
 
-    for (int i = 0; i < kArrayCount; ++i) {
-        Halide::Realization array_output_realized = gen.array_output[i].realize(kSize, kSize, gen.get_target());
-        Buffer<int16_t> g0 = array_output_realized;
-        verify(array_input[i], 1.0f, int_args[i], g0);
+        Buffer<float> b0 = gen.typed_buffer_output.realize(kSize, kSize, 3);
+        verify(buffer_input, 1.f, 0, b0);
+
+        Buffer<float> b1 = gen.untyped_buffer_output.realize(kSize, kSize, 3);
+        verify(buffer_input, 1.f, 0, b1);
+
+        Buffer<uint8_t> b2 = gen.static_compiled_buffer_output.realize(kSize, kSize, 3);
+        verify(buffer_input, 1.f, 42, b2);
     }
 
-    Halide::Realization typed_buffer_output_realized = gen.typed_buffer_output.realize(kSize, kSize, 3);
-    Buffer<float> b0 = typed_buffer_output_realized;
-    verify(buffer_input, 1.f, 0, b0);
+    {
+        // Now, let's do the same test using the generic GeneratorStub variant
+        // (which doesn't use any of the customization from stubtest.stub.h).
+        // First, create the stub via the registry name:
+        auto gen = GeneratorStub(context, "StubNS1::StubNS2::StubTest");
 
-    Halide::Realization untyped_buffer_output_realized = gen.untyped_buffer_output.realize(kSize, kSize, 3);
-    Buffer<float> b1 = untyped_buffer_output_realized;
-    verify(buffer_input, 1.f, 0, b1);
+        // Call generate() in the same way, adding explicit vector-ctor typing where needed.
+        gen.generate(buffer_input,
+                     buffer_input,
+                     Func(simple_input),
+                     std::vector<Func>{ Func(array_input[0]), Func(array_input[1]) },
+                     1.25f,
+                     std::vector<Expr>{ int_args[0], int_args[1] });
 
-    Halide::Realization static_compiled_buffer_output_realized = gen.static_compiled_buffer_output.realize(kSize, kSize, 3);
-    Buffer<uint8_t> b2 = static_compiled_buffer_output_realized;
-    verify(buffer_input, 1.f, 42, b2);
+        // Accessing outputs is done via the [] operator, using the name of the output.
+        // (If you ask for an output that doesn't exist, you'll fail at Halide compilation time.)
+        Func tuple_output = gen["tuple_output"];
+
+        // ScheduleParams are set by string; if no such ScheduleParam exists,
+        // or the type we are passing for it is inappropriate, you'll fail at Halide compilation time.
+        gen.set_schedule_param("intermediate_level", LoopLevel(tuple_output, tuple_output.args().at(1)));
+
+        gen.schedule();
+
+        // Aside from the subscripting, the rest of the code is basically the
+        // same as above.
+        Buffer<float> s0 = gen["simple_output"].realize(kSize, kSize, 3);
+        verify(array_input[0], 1.f, 0, s0);
+
+        Realization f = gen["tuple_output"].realize(kSize, kSize, 3);
+        // Explicitly cast Buffer<> -> Buffer<float> to satisfy verify() type inference
+        Buffer<float> f0 = f[0];
+        Buffer<float> f1 = f[1];
+        verify(array_input[0], 1.25f, 0, f0);
+        verify(array_input[0], 1.25f, 33, f1);
+
+        for (int i = 0; i < kArrayCount; ++i) {
+            Buffer<int16_t> g0 = gen["array_output"][i].realize(kSize, kSize);
+            verify(array_input[i], 1.0f, int_args[i], g0);
+        }
+
+        Buffer<float> b0 = gen["typed_buffer_output"].realize(kSize, kSize, 3);
+        verify(buffer_input, 1.f, 0, b0);
+
+        Buffer<float> b1 = gen["untyped_buffer_output"].realize(kSize, kSize, 3);
+        verify(buffer_input, 1.f, 0, b1);
+
+        Buffer<uint8_t> b2 = gen["static_compiled_buffer_output"].realize(kSize, kSize, 3);
+        verify(buffer_input, 1.f, 42, b2);
+    }
 
     printf("Success!\n");
     return 0;

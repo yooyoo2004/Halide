@@ -107,56 +107,7 @@ Argument to_argument(const Internal::Parameter &param) {
         param.is_buffer() ? Argument::InputBuffer : Argument::InputScalar,
         param.type(), param.dimensions(), def, min, max);
 }
-
-std::pair<int64_t, int64_t> rational_approximation_helper(double d, int max_depth) {
-    const int64_t int_part = static_cast<int64_t>(std::floor(d));
-    const double float_part = d - int_part;
-    if (max_depth == 0 || float_part == 0.0) {
-        return {int_part, 1};
-    }
-
-    const auto r = rational_approximation_helper(1.0/float_part, max_depth - 1);
-    const int64_t num = r.second;
-    const int64_t den = r.first;
-    if (mul_would_overflow(64, int_part, den) ||
-        add_would_overflow(64, num, int_part * den)) {
-        return {0, 0};
-    }
-
-    return {num + int_part * den, den};
-}
     
-std::pair<int64_t, int64_t> rational_approximation(double d) {
-    // Special-case non-finite numbers.
-    if (std::isnan(d)) return {0, 0};
-
-    const int64_t sign = (d < 0) ? -1 : 1;
-    if (!std::isfinite(d)) return {sign, 0};
-
-    d = std::abs(d);
-
-    // The most accurate rationals to approximate a real come from
-    // truncating its continued fraction representation.  We want the
-    // largest continued fraction possible, but at some point they'll
-    // overflow our rational type, and because they're evaluated
-    // backwards it's not easy to stop at the point which will not
-    // trigger overflow. Use binary search to find the right depth.
-    std::pair<int64_t, int64_t> best {0, 0};
-    int lo = 0, hi = 64; 
-    while (lo + 1 < hi) {
-        int mid = (lo + hi)/2;
-        auto next = rational_approximation_helper(d, mid);
-        if (next.first == 0 && next.second == 0) {
-            hi = mid;
-        } else {
-            lo = mid;
-            best = next;
-        }
-    }
-    
-    return {best.first * sign, best.second};
-}
-
 Func make_param_func(const Parameter &p, const std::string &name) {
     internal_assert(p.is_buffer());
     std::vector<Var> args;
@@ -259,12 +210,23 @@ public:
           schedule_params(filter_params(generator_params, true)), 
           inputs(inputs), 
           outputs(outputs) {
+        namespaces = split_string(generator_name, "::");
+        internal_assert(namespaces.size() >= 1);
+        if (namespaces[0].empty()) {
+            // We have a name like ::foo::bar::baz; omit the first empty ns.
+            namespaces.erase(namespaces.begin());
+            internal_assert(namespaces.size() >= 2);
+        }
+        class_name = namespaces.back();
+        namespaces.pop_back();
     }
 
     void emit();
 private:
     std::ostream &stream;
     const std::string generator_name;
+    std::string class_name;
+    std::vector<std::string> namespaces;
     const std::vector<Internal::GeneratorParamBase *> generator_params;
     const std::vector<Internal::GeneratorParamBase *> schedule_params;
     const std::vector<Internal::GeneratorInputBase *> inputs;
@@ -285,8 +247,7 @@ private:
     /** Emit spaces according to the current indentation level */
     std::string indent();
 
-    void emit_inputs_struct();
-    void emit_params_struct(bool schedule_only);
+    void emit_params_setters(bool is_schedule_params);
 };
 
 std::string StubEmitter::indent() {
@@ -297,127 +258,34 @@ std::string StubEmitter::indent() {
     return o.str();
 }
 
-void StubEmitter::emit_params_struct(bool is_schedule_params) {
+void StubEmitter::emit_params_setters(bool is_schedule_params) {
+    const std::string name = is_schedule_params ? "schedule" : "generator";
+    stream << indent() << "// set_" << name << "_param methods\n";
+    stream << indent() << "template <typename T>\n";
+    stream << indent() << class_name << " &set_" << name << "_param(const std::string &name, const T &value) {\n";
+    indent_level++;
+    stream << indent() << "(void) GeneratorStub::set_" << name << "_param(name, value);\n";
+    stream << indent() << "return *this;\n";
+    indent_level--;
+    stream << indent() << "}\n";
+
     const auto &v = is_schedule_params ? schedule_params : generator_params;
-    std::string name = is_schedule_params ? "ScheduleParams" : "GeneratorParams";
-    stream << indent() << "struct " << name << " final {\n";
-    indent_level++;
     if (!v.empty()) {
         for (auto p : v) {
             if (p->is_synthetic_param()) continue;
-            stream << indent() << p->get_c_type() << " " << p->name << "{ " << p->get_default_value() << " };\n";
+            stream << indent() << class_name << " &set_" << p->name << "(const " << p->get_c_type() << " &value) {\n";
+            indent_level++;
+            std::string value = "value";
+            // TODO: ugly special-case needed for enums could be made cleaner
+            if (starts_with(p->get_c_type(), "Enum_")) {
+                value = p->call_to_string(value);
+            }
+            stream << indent() << "return set_" << name << "_param(\"" << p->name <<  "\", " << value << ");\n";
+            indent_level--;
+            stream << indent() << "}\n";
         }
         stream << "\n";
     }
-
-    stream << indent() << name << "() {}\n";
-    stream << "\n";
-
-    if (!v.empty()) {
-        stream << indent() << name << "(\n";
-        indent_level++;
-        std::string comma = "";
-        for (auto p : v) {
-            if (p->is_synthetic_param()) continue;
-            stream << indent() << comma << p->get_c_type() << " " << p->name << "\n";
-            comma = ", ";
-        }
-        indent_level--;
-        stream << indent() << ") : \n";
-        indent_level++;
-        comma = "";
-        for (auto p : v) {
-            if (p->is_synthetic_param()) continue;
-            stream << indent() << comma << p->name << "(" << p->name << ")\n";
-            comma = ", ";
-        }
-        indent_level--;
-        stream << indent() << "{\n";
-        stream << indent() << "}\n";
-        stream << "\n";
-    }
-
-    stream << indent() << "inline NO_INLINE std::map<std::string, std::string> to_string_map() const {\n";
-    indent_level++;
-    stream << indent() << "std::map<std::string, std::string> m;\n";
-    for (auto p : v) {
-        if (p->is_synthetic_param()) continue;
-        if (p->is_looplevel_param()) continue;
-        stream << indent() << "if (" << p->name << " != " << p->get_default_value() << ") "
-                        << "m[\"" << p->name << "\"] = " << p->call_to_string(p->name) << ";\n";
-    }
-    stream << indent() << "return m;\n";
-    indent_level--;
-    stream << indent() << "}\n";
-
-    if (is_schedule_params) {
-        stream << "\n";
-        stream << indent() << "inline NO_INLINE std::map<std::string, LoopLevel> to_looplevel_map() const {\n";
-        indent_level++;
-        stream << indent() << "std::map<std::string, LoopLevel> m;\n";
-        for (auto p : v) {
-            if (p->is_synthetic_param()) continue;
-            if (!p->is_looplevel_param()) continue;
-            stream << indent() << "if (" << p->name << " != " << p->get_default_value() << ") "
-                            << "m[\"" << p->name << "\"] = " << p->name << ";\n";
-        }
-        stream << indent() << "return m;\n";
-        indent_level--;
-        stream << indent() << "}\n";
-    }
-
-    indent_level--;
-    stream << indent() << "};\n";
-    stream << "\n";
-}
-
-void StubEmitter::emit_inputs_struct() {
-    struct InInfo {
-        std::string c_type;
-        std::string name;
-    };
-    std::vector<InInfo> in_info;
-    for (auto input : inputs) {
-        std::string c_type = input->get_c_type();
-        if (input->is_array()) {
-            c_type = "std::vector<" + c_type + ">";
-        }
-        in_info.push_back({c_type, input->name()});
-    }
-
-    const std::string name = "Inputs";
-    stream << indent() << "struct " << name << " final {\n";
-    indent_level++;
-    for (auto in : in_info) {
-        stream << indent() << in.c_type << " " << in.name << ";\n";
-    }
-    stream << "\n";
-
-    stream << indent() << name << "() {}\n";
-    stream << "\n";
-
-    stream << indent() << name << "(\n";
-    indent_level++;
-    std::string comma = "";
-    for (auto in : in_info) {
-        stream << indent() << comma << "const " << in.c_type << "& " << in.name << "\n";
-        comma = ", ";
-    }
-    indent_level--;
-    stream << indent() << ") : \n";
-    indent_level++;
-    comma = "";
-    for (auto in : in_info) {
-        stream << indent() << comma << in.name << "(" << in.name << ")\n";
-        comma = ", ";
-    }
-    indent_level--;
-    stream << indent() << "{\n";
-    stream << indent() << "}\n";
-
-    indent_level--;
-    stream << indent() << "};\n";
-    stream << "\n";
 }
 
 void StubEmitter::emit() {
@@ -433,15 +301,18 @@ void StubEmitter::emit() {
         return;
     }
 
-    std::vector<std::string> namespaces = split_string(generator_name, "::");
-    internal_assert(namespaces.size() >= 1);
-    if (namespaces[0].empty()) {
-        // We have a name like ::foo::bar::baz; omit the first empty ns.
-        namespaces.erase(namespaces.begin());
-        internal_assert(namespaces.size() >= 2);
+    struct InputInfo {
+        std::string name;
+        std::string ctype;
+    };
+    std::vector<InputInfo> in_info;
+    for (auto input : inputs) {
+        std::string ctype = input->get_c_type();
+        if (input->is_array()) {
+            ctype = "std::vector<" + ctype + ">";
+        }
+        in_info.push_back({input->name(), ctype});
     }
-    const std::string class_name = namespaces.back();
-    namespaces.pop_back();
 
     struct OutputInfo {
         std::string name;
@@ -503,133 +374,68 @@ void StubEmitter::emit() {
         stream << decl << "\n";
     }
 
-    stream << indent() << "class " << class_name << " final : public Halide::Internal::GeneratorStub {\n";
+    stream << indent() << "class " << class_name << " : public Halide::GeneratorStub {\n";
     stream << indent() << "public:\n";
     indent_level++;
-
-    emit_inputs_struct();
-    emit_params_struct(true);
-    emit_params_struct(false);
 
     stream << indent() << class_name << "() {}\n";
     stream << "\n";
 
-    stream << indent() << "NO_INLINE " << class_name << "(\n";
+    stream << indent() << "explicit " << class_name << "(const GeneratorContext& context)\n";
     indent_level++;
-    stream << indent() << "const GeneratorContext& context,\n";
-    stream << indent() << "const Inputs& inputs,\n";
-    stream << indent() << "const GeneratorParams& params = GeneratorParams()\n";
-    indent_level--;
-    stream << indent() << ")\n";
-    indent_level++;
-    stream << indent() << ": GeneratorStub(context, &factory, params.to_string_map(), {\n";
-    indent_level++;
-    for (size_t i = 0; i < inputs.size(); ++i) {
-        stream << indent() << "to_stub_input_vector(inputs." << inputs[i]->name() << ")";
-        stream << ",\n";
-    }
-    indent_level--;
-    stream << indent() << "})\n";
-    for (const auto &out : out_info) {
-        stream << indent() << ", " << out.name << "(" << out.getter << ")\n";
-    }
+    stream << indent() << ": GeneratorStub(context, &factory)\n";
     indent_level--;
     stream << indent() << "{\n";
     stream << indent() << "}\n";
     stream << "\n";
 
     stream << indent() << "// delegating ctor to allow GeneratorContext-pointer\n";
-    stream << indent() << class_name << "(\n";
+    stream << indent() << "explicit " << class_name << "(const GeneratorContext* context)\n";
     indent_level++;
-    stream << indent() << "const GeneratorContext* context,\n";
-    stream << indent() << "const Inputs& inputs,\n";
-    stream << indent() << "const GeneratorParams& params = GeneratorParams()\n";
+    stream << indent() << ": " << class_name << "(*context) {}\n";
     indent_level--;
-    stream << indent() << ")\n";
-    indent_level++;
-    stream << indent() << ": " << class_name << "(*context, inputs, params) {}\n";
     stream << "\n";
 
-    if (!generator_params.empty()) {
-        stream << indent() << "// templated construction method with inputs\n";
-        stream << indent() << "template<\n";
-        std::string comma = "";
-        indent_level++;
-        for (auto p : generator_params) {
-            if (p->is_synthetic_param()) continue;
-            std::string type = p->get_template_type();
-            std::string value = p->get_template_value();
-            if (type == "float" || type == "double") {
-                // floats and doubles can't be used as template value arguments;
-                // it turns out to be pretty uncommon use floating point types
-                // in GeneratorParams, but to avoid breaking these cases entirely, 
-                // use std::ratio as an approximation for the default value.
-                auto ratio = rational_approximation(std::atof(value.c_str()));
-                stream << indent() << comma << "typename" << " " << p->name << " = std::ratio<" << ratio.first << ", " << ratio.second << ">\n";
-            } else {
-                stream << indent() << comma << type << " " << p->name << " = " << value << "\n";
-            }
-            comma = ", ";
-        }
-        indent_level--;
-        stream << indent() << ">\n";
-        stream << indent() << "static " << class_name << " make(const GeneratorContext& context, const Inputs& inputs) {\n";
-        indent_level++;
-        stream << indent() << "GeneratorParams gp(\n";
-        indent_level++;
-        comma = "";
-        for (auto p : generator_params) {
-            if (p->is_synthetic_param()) continue;
-            std::string type = p->get_template_type();
-            if (type == "typename") {
-                stream << indent() << comma << "Halide::type_of<" << p->name << ">()\n";
-            } else if (type == "float" || type == "double") {
-                stream << indent() << comma << "ratio_to_double<" << p->name << ">()\n";
-            } else {
-                stream << indent() << comma << p->name << "\n";
-            }
-            comma = ", ";
-        }
-        indent_level--;
-        stream << indent() << ");\n";
-        stream << indent() << "return " << class_name << "(context, inputs, gp);\n";
-        indent_level--;
-        indent_level--;
-        stream << indent() << "}\n";
-        stream << "\n";
-    }
 
-    stream << indent() << "// schedule method\n";
-    stream << indent() << "void schedule(const ScheduleParams& params = ScheduleParams()) {\n";
+    stream << indent() << "// generate method\n";
+    stream << indent() << "NO_INLINE " << class_name << " &generate(\n";
     indent_level++;
-    stream << indent() << "GeneratorStub::schedule(params.to_string_map(), params.to_looplevel_map());\n";
-    indent_level--;
-    stream << indent() << "}\n";
-    stream << "\n";
-
-    stream << indent() << "// move constructor\n";
-    stream << indent() << class_name << "("<< class_name << "&& that)\n";
-    indent_level++;
-    stream << indent() << ": GeneratorStub(std::move(that))\n";
-    for (const auto &out : out_info) {
-        stream << indent() << ", " << out.name << "(std::move(that." << out.name << "))\n";
+    for (size_t i = 0; i < in_info.size(); ++i) {
+        const char *comma = (i+1 < in_info.size()) ? "," : "";
+        auto &in = in_info[i];
+        stream << indent() << "const " << in.ctype << "& " << in.name << comma << "\n";
     }
     indent_level--;
-    stream << indent() << "{\n";
-    stream << indent() << "}\n";
-    stream << "\n";
-
-    stream << indent() << "// move assignment operator\n";
-    stream << indent() << class_name << "& operator=("<< class_name << "&& that) {\n";
+    stream << indent() << ") {\n";
     indent_level++;
-    stream << indent() << "GeneratorStub::operator=(std::move(that));\n";
+    stream << indent() << "(void) GeneratorStub::generate(\n";
+    indent_level++;
+    for (size_t i = 0; i < in_info.size(); ++i) {
+        const char *comma = (i+1 < in_info.size()) ? "," : "";
+        auto &in = in_info[i];
+        stream << indent() << in.name << comma << "\n";
+    }
+    indent_level--;
+    stream << indent() << ");\n";
     for (const auto &out : out_info) {
-        stream << indent() << out.name << " = std::move(that." << out.name << ");\n";
+        stream << indent() << out.name << " = " << out.getter << ";\n";
     }
     stream << indent() << "return *this;\n";
     indent_level--;
     stream << indent() << "}\n";
     stream << "\n";
+
+    stream << indent() << "// schedule method\n";
+    stream << indent() << class_name << " &schedule() {\n";
+    indent_level++;
+    stream << indent() << "(void) GeneratorStub::schedule();\n";
+    stream << indent() << "return *this;\n";
+    indent_level--;
+    stream << indent() << "}\n";
+    stream << "\n";
+
+    emit_params_setters(false);
+    emit_params_setters(true);
 
     stream << indent() << "// Output(s)\n";
     stream << indent() << "// TODO: identify vars used\n";
@@ -644,6 +450,7 @@ void StubEmitter::emit() {
     indent_level--;
     stream << indent() << "protected:\n";
     indent_level++;
+
     stream << indent() << "NO_INLINE void verify() {\n";
     indent_level++;
     for (const auto &out : out_info) {
@@ -656,9 +463,9 @@ void StubEmitter::emit() {
     indent_level--;
     stream << indent() << "private:\n";
     indent_level++;
-    stream << indent() << "static std::unique_ptr<Halide::Internal::GeneratorBase> factory(const GeneratorContext& context, const std::map<std::string, std::string>& params) {\n";
+    stream << indent() << "static std::unique_ptr<Halide::Internal::GeneratorBase> factory(const GeneratorContext& context) {\n";
     indent_level++;
-    stream << indent() << "return Halide::Internal::GeneratorRegistry::create(\"" << generator_name << "\", context, params);\n";
+    stream << indent() << "return Halide::Internal::GeneratorRegistry::create(\"" << generator_name << "\", context, {});\n";
     indent_level--;
     stream << indent() << "};\n";
     stream << "\n";
@@ -673,33 +480,6 @@ void StubEmitter::emit() {
     stream << "\n";
 
     stream << indent() << "#endif  // " << guard.str() << "\n";
-}
-
-GeneratorStub::GeneratorStub(const GeneratorContext &context,
-                             GeneratorFactory generator_factory,
-                             const std::map<std::string, std::string> &generator_params,
-                             const std::vector<std::vector<Internal::StubInput>> &inputs)
-    : generator(generator_factory(context, generator_params)) {
-    generator->set_inputs_vector(inputs);
-    generator->call_generate();
-}
-
-void GeneratorStub::schedule(const std::map<std::string, std::string> &schedule_params,
-              const std::map<std::string, LoopLevel> &schedule_params_looplevels) {
-    generator->set_schedule_param_values(schedule_params, schedule_params_looplevels);
-    generator->call_schedule();
-}
-
-void GeneratorStub::verify_same_funcs(const Func &a, const Func &b) {
-    user_assert(a.function().get_contents().same_as(b.function().get_contents())) 
-        << "Expected Func " << a.name() << " and " << b.name() << " to match.\n";
-}
-
-void GeneratorStub::verify_same_funcs(const std::vector<Func>& a, const std::vector<Func>& b) {
-    user_assert(a.size() == b.size()) << "Mismatch in Function vector length.\n";
-    for (size_t i = 0; i < a.size(); ++i) {
-        verify_same_funcs(a[i], b[i]);
-    }
 }
 
 const std::map<std::string, Type> &get_halide_type_enum_map() {
@@ -1213,22 +993,6 @@ void GeneratorBase::set_generator_param_values(const std::map<std::string, std::
     for (auto key_value : params) {
         // We don't care about is_schedule_param here.
         find_param_by_name(key_value.first).set_from_string(key_value.second);
-    }
-}
-
-void GeneratorBase::set_schedule_param_values(const std::map<std::string, std::string> &params, 
-                                              const std::map<std::string, LoopLevel> &looplevel_params) {
-    for (auto key_value : params) {
-        auto &p = find_param_by_name(key_value.first);
-        // It's not OK to set non-schedule params here.
-        user_assert(p.is_schedule_param()) << "GeneratorParam cannot be specified for: " << p.name;
-        p.set_from_string(key_value.second);
-    }
-    for (auto key_value : looplevel_params) {
-        auto &p = find_param_by_name(key_value.first);
-        // It's not OK to set non-schedule params here.
-        user_assert(p.is_schedule_param()) << "GeneratorParam cannot be specified for: " << p.name;
-        static_cast<GeneratorParam<LoopLevel> *>(&p)->set(key_value.second);
     }
 }
 
@@ -1988,41 +1752,29 @@ void generator_test() {
     // Verify that Tuple parameter-pack variants can convert GeneratorParam to Expr
     Tuple t(gp, gp, gp);
 
-    // Test rational_approximation
-    auto check_ratio = [](double d, std::pair<int64_t, int64_t> expected) {
-        auto actual = rational_approximation(d);
-        internal_assert(actual == expected) 
-            << "rational_approximation(" << d << ") failed:"
-            << " expected " << expected.first << "/" << expected.second
-            << " actual " << actual.first << "/" << actual.second << "\n";
-    };
-
-    // deliberately use fractional values that are exactly representable so that
-    // we minimize testing variation across compilers
-    const double kFrac1 = 1234.125;
-    const double kFrac2 = 123412341234.125;
-    const double kFrac3 = 1.0/65536.0;
-
-    check_ratio(0.0,        {0, 1});
-    check_ratio(1.0,        {1, 1});
-    check_ratio(2.0,        {2, 1});
-    check_ratio(kFrac1,     {9873, 8});
-    check_ratio(kFrac2,     {987298729873, 8});
-    check_ratio(kFrac3,     {1, 65536});
-
-    check_ratio(-0.0,       {0, 1});
-    check_ratio(-1.0,       {-1, 1});
-    check_ratio(-2.0,       {-2, 1});
-    check_ratio(-kFrac1,    {-9873, 8});
-    check_ratio(-kFrac2,    {-987298729873, 8});
-    check_ratio(-kFrac3,    {-1, 65536});
-
-    check_ratio(NAN, {0, 0});
-    check_ratio(INFINITY, {1, 0});
-    check_ratio(-INFINITY, {-1, 0});
-
     std::cout << "Generator test passed" << std::endl;
 }
 
 }  // namespace Internal
+
+GeneratorStub::GeneratorStub(const GeneratorContext &context, const std::string &generator_name) 
+    : generator(Halide::Internal::GeneratorRegistry::create(generator_name, context, {})) {
+}
+
+GeneratorStub::GeneratorStub(const GeneratorContext &context, GeneratorFactory generator_factory)
+    : generator(generator_factory(context)) {
+}
+
+void GeneratorStub::verify_same_funcs(const Func &a, const Func &b) {
+    user_assert(a.function().get_contents().same_as(b.function().get_contents())) 
+        << "Expected Func " << a.name() << " and " << b.name() << " to match.\n";
+}
+
+void GeneratorStub::verify_same_funcs(const std::vector<Func>& a, const std::vector<Func>& b) {
+    user_assert(a.size() == b.size()) << "Mismatch in Function vector length.\n";
+    for (size_t i = 0; i < a.size(); ++i) {
+        verify_same_funcs(a[i], b[i]);
+    }
+}
+
 }  // namespace Halide

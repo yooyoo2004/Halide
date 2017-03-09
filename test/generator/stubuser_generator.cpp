@@ -32,21 +32,14 @@ public:
 
         Buffer<uint8_t> constant_image = make_image<uint8_t>();
 
-        // We'll explicitly fill in the struct fields by name, just to show
-        // it as an option. (Alternately, we could fill it in by using
-        // C++11 aggregate-initialization syntax.)
-        StubTest::Inputs inputs;
-        inputs.typed_buffer_input = constant_image;
-        inputs.untyped_buffer_input = input;
-        inputs.simple_input = input;
-        inputs.array_input = { input };
-        inputs.float_arg = 1.234f;
-        inputs.int_arg = { int_arg };
-
-        StubTest::GeneratorParams gp;
-        gp.untyped_buffer_output_type = int32_buffer_output.type();
-
-        stub = StubTest(this, inputs, gp);
+        stub = StubTest(this)
+            .set_untyped_buffer_output_type(int32_buffer_output.type())
+            .generate(constant_image, 
+                      input, 
+                      input, 
+                      {input}, 
+                      1.234f, 
+                      {int_arg});
 
         const float kOffset = 2.f;
         calculated_output(x, y, c) = cast<uint8_t>(stub.tuple_output(x, y, c)[1] + kOffset);
@@ -60,8 +53,10 @@ public:
     }
 
     void schedule() {
-        const bool vectorize = true;
-        stub.schedule({ vectorize, LoopLevel(calculated_output, Var("y")) });
+        stub
+            .set_vectorize(true)
+            .set_intermediate_level(LoopLevel(calculated_output, Var("y")))
+            .schedule();
     }
 
 private:
