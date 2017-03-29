@@ -275,7 +275,6 @@ inline std::string halide_type_to_enum_string(const Type &t) {
     return enum_to_string(get_halide_type_enum_map(), t);
 }
 
-EXPORT extern Halide::LoopLevel get_halide_undefined_looplevel();
 EXPORT extern const std::map<std::string, Halide::LoopLevel> &get_halide_looplevel_enum_map();
 inline std::string halide_looplevel_to_enum_string(const LoopLevel &loop_level){
     return enum_to_string(get_halide_looplevel_enum_map(), loop_level);
@@ -330,7 +329,7 @@ public:
     const std::string name;
 
     // overload the set() function to call the right virtual method based on type.
-    // This allows us to attempt to set a GeneratorParam via a 
+    // This allows us to attempt to set a GeneratorParam via a
     // plain C++ type, even if we don't know the specific templated
     // subclass. Attempting to set the wrong type will assert.
     // Notice that there is no typed setter for Enums, for obvious reasons;
@@ -438,11 +437,11 @@ protected:
 private:
     T value_;
 
-    template <typename T2, typename std::enable_if<std::is_convertible<T, T2>::value>::type * = nullptr>
+    template <typename T2, typename std::enable_if<std::is_convertible<T2, T>::value>::type * = nullptr>
     HALIDE_ALWAYS_INLINE void typed_setter_impl(const T2 &t2, const char * msg) {
         // Arithmetic types must roundtrip losslessly.
-        if (!std::is_same<T, T2>::value && 
-            std::is_arithmetic<T>::value && 
+        if (!std::is_same<T, T2>::value &&
+            std::is_arithmetic<T>::value &&
             std::is_arithmetic<T2>::value) {
             const T t = t2;
             const T2 t2a = t;
@@ -453,7 +452,7 @@ private:
         value_ = t2;
     }
 
-    template <typename T2, typename std::enable_if<!std::is_convertible<T, T2>::value>::type * = nullptr>
+    template <typename T2, typename std::enable_if<!std::is_convertible<T2, T>::value>::type * = nullptr>
     HALIDE_ALWAYS_INLINE void typed_setter_impl(const T2 &, const char *msg) {
         fail_wrong_type(msg);
     }
@@ -674,7 +673,7 @@ public:
     }
 
     bool defined() const {
-        return this->value() != get_halide_undefined_looplevel();
+        return this->value().defined();
     }
 
 private:
@@ -1302,6 +1301,9 @@ private:
 protected:
     using TBase = typename Super::TBase;
 
+    friend class ::Halide::Func;
+    friend class ::Halide::Stage;
+
     bool allow_synthetic_generator_params() const override {
         return !T::has_static_halide_type();
     }
@@ -1610,7 +1612,74 @@ public:
 
 namespace Internal {
 
+
 class GeneratorOutputBase : public GIOBase {
+public:
+#define HALIDE_OUTPUT_FORWARD(method)                                       \
+    template<typename ...Args>                                              \
+    inline auto method(Args&&... args) ->                                   \
+        decltype(std::declval<Func>().method(std::forward<Args>(args)...)) {\
+        return get_func_ref().method(std::forward<Args>(args)...);          \
+    }
+
+#define HALIDE_OUTPUT_FORWARD_CONST(method)                                 \
+    template<typename ...Args>                                              \
+    inline auto method(Args&&... args) const ->                             \
+        decltype(std::declval<Func>().method(std::forward<Args>(args)...)) {\
+        return get_func_ref().method(std::forward<Args>(args)...);          \
+    }
+
+    /** Forward schedule-related methods to the underlying Func. */
+    // @{
+    HALIDE_OUTPUT_FORWARD(align_bounds)
+    HALIDE_OUTPUT_FORWARD(align_storage)
+    HALIDE_OUTPUT_FORWARD_CONST(args)
+    HALIDE_OUTPUT_FORWARD(bound)
+    HALIDE_OUTPUT_FORWARD(bound_extent)
+    HALIDE_OUTPUT_FORWARD(compute_at)
+    HALIDE_OUTPUT_FORWARD(compute_inline)
+    HALIDE_OUTPUT_FORWARD(compute_root)
+    HALIDE_OUTPUT_FORWARD_CONST(defined)
+    HALIDE_OUTPUT_FORWARD(fold_storage)
+    HALIDE_OUTPUT_FORWARD(fuse)
+    HALIDE_OUTPUT_FORWARD(glsl)
+    HALIDE_OUTPUT_FORWARD(gpu)
+    HALIDE_OUTPUT_FORWARD(gpu_blocks)
+    HALIDE_OUTPUT_FORWARD(gpu_single_thread)
+    HALIDE_OUTPUT_FORWARD(gpu_threads)
+    HALIDE_OUTPUT_FORWARD(gpu_tile)
+    HALIDE_OUTPUT_FORWARD_CONST(has_update_definition)
+    HALIDE_OUTPUT_FORWARD(hexagon)
+    HALIDE_OUTPUT_FORWARD(in)
+    HALIDE_OUTPUT_FORWARD(memoize)
+    HALIDE_OUTPUT_FORWARD_CONST(num_update_definitions)
+    HALIDE_OUTPUT_FORWARD_CONST(output_types)
+    HALIDE_OUTPUT_FORWARD_CONST(outputs)
+    HALIDE_OUTPUT_FORWARD(parallel)
+    HALIDE_OUTPUT_FORWARD(prefetch)
+    HALIDE_OUTPUT_FORWARD(rename)
+    HALIDE_OUTPUT_FORWARD(reorder)
+    HALIDE_OUTPUT_FORWARD(reorder_storage)
+    HALIDE_OUTPUT_FORWARD_CONST(rvars)
+    HALIDE_OUTPUT_FORWARD(serial)
+    HALIDE_OUTPUT_FORWARD(shader)
+    HALIDE_OUTPUT_FORWARD(specialize)
+    HALIDE_OUTPUT_FORWARD(split)
+    HALIDE_OUTPUT_FORWARD(store_at)
+    HALIDE_OUTPUT_FORWARD(store_root)
+    HALIDE_OUTPUT_FORWARD(tile)
+    HALIDE_OUTPUT_FORWARD(unroll)
+    HALIDE_OUTPUT_FORWARD(update)
+    HALIDE_OUTPUT_FORWARD_CONST(update_args)
+    HALIDE_OUTPUT_FORWARD_CONST(update_value)
+    HALIDE_OUTPUT_FORWARD_CONST(update_values)
+    HALIDE_OUTPUT_FORWARD_CONST(value)
+    HALIDE_OUTPUT_FORWARD_CONST(values)
+    HALIDE_OUTPUT_FORWARD(vectorize)
+    // }@
+
+#undef HALIDE_OUTPUT_FORWARD
+
 protected:
     EXPORT GeneratorOutputBase(size_t array_size,
                         const std::string &name,
@@ -1636,6 +1705,18 @@ protected:
     }
 
     EXPORT void check_value_writable() const override;
+
+    NO_INLINE Func &get_func_ref() {
+        internal_assert(kind() != IOKind::Scalar);
+        internal_assert(funcs_.size() == array_size() && exprs_.empty());
+        return funcs_[0];
+    }
+
+    NO_INLINE const Func &get_func_ref() const {
+        internal_assert(kind() != IOKind::Scalar);
+        internal_assert(funcs_.size() == array_size() && exprs_.empty());
+        return funcs_[0];
+    }
 };
 
 template<typename T>
@@ -1865,7 +1946,7 @@ public:
     GeneratorOutput_Func<T> &operator=(const Func &f) {
         this->check_value_writable();
 
-        // Don't bother verifying the Func type, dimensions, etc., here: 
+        // Don't bother verifying the Func type, dimensions, etc., here:
         // That's done later, when we produce the pipeline.
         get_assignable_func_ref(0) = f;
         return *this;
@@ -2188,7 +2269,7 @@ public:
     // Call build() and produce a Module for the result.
     // If function_name is empty, generator_name() will be used for the function.
     EXPORT Module build_module(const std::string &function_name = "",
-                               const LoweredFunc::LinkageType linkage_type = LoweredFunc::External);
+                               const LoweredFunc::LinkageType linkage_type = LoweredFunc::ExternalPlusMetadata);
 
     /**
      * set_inputs is a variadic wrapper around set_inputs_vector, which makes usage much simpler
@@ -2204,15 +2285,15 @@ public:
     void set_inputs(const Args &...args) {
         // set_inputs_vector() checks this too, but checking it here allows build_inputs() to avoid out-of-range checks.
         ParamInfo &pi = param_info();
-        user_assert(sizeof...(args) == pi.filter_inputs.size()) 
-                << "Expected exactly " << pi.filter_inputs.size() 
+        user_assert(sizeof...(args) == pi.filter_inputs.size())
+                << "Expected exactly " << pi.filter_inputs.size()
                 << " inputs but got " << sizeof...(args) << "\n";
         set_inputs_vector(build_inputs(std::forward_as_tuple<const Args &...>(args...), make_index_sequence<sizeof...(Args)>{}));
     }
 
     Realization realize(std::vector<int32_t> sizes) {
         check_scheduled("realize");
-        return produce_pipeline().realize(sizes, get_target());
+        return get_pipeline().realize(sizes, get_target());
     }
 
     // Only enable if none of the args are Realization; otherwise we can incorrectly
@@ -2220,13 +2301,20 @@ public:
     template <typename... Args, typename std::enable_if<NoRealizations<Args...>::value>::type * = nullptr>
     Realization realize(Args&&... args) {
         check_scheduled("realize");
-        return produce_pipeline().realize(std::forward<Args>(args)..., get_target());
+        return get_pipeline().realize(std::forward<Args>(args)..., get_target());
     }
 
     void realize(Realization r) {
         check_scheduled("realize");
-        produce_pipeline().realize(r, get_target());
+        get_pipeline().realize(r, get_target());
     }
+
+    // Return the Pipeline that has been built by the generate() method.
+    // This method can only be used from a Generator that has a generate()
+    // method (vs a build() method), and currently can only be called from
+    // the schedule() method. (This may be relaxed in the future to allow
+    // calling from generate() as long as all Outputs have been defined.)
+    EXPORT Pipeline get_pipeline();
 
 protected:
     EXPORT GeneratorBase(size_t size, const void *introspection_helper);
@@ -2246,7 +2334,6 @@ protected:
     EXPORT void post_generate();
     EXPORT void pre_schedule();
     EXPORT void post_schedule();
-    EXPORT Pipeline produce_pipeline();
 
     template<typename T>
     using Input = GeneratorInput<T>;
@@ -2313,13 +2400,14 @@ private:
     };
 
     const size_t size;
-    // Lazily-allocated-and-inited struct with info about our various Params. 
+    // Lazily-allocated-and-inited struct with info about our various Params.
     // Do not access directly: use the param_info() getter to lazy-init.
-    std::unique_ptr<ParamInfo> param_info_ptr; 
+    std::unique_ptr<ParamInfo> param_info_ptr;
 
     std::shared_ptr<Internal::ValueTracker> value_tracker;
     bool inputs_set{false};
     std::string generator_name;
+    Pipeline pipeline;
 
     // Return our ParamInfo (lazy-initing as needed).
     EXPORT ParamInfo &param_info();
@@ -2475,7 +2563,7 @@ private:
     }
 
     template<typename... Args, size_t... Indices>
-    std::vector<std::vector<StubInput>> build_inputs(const std::tuple<const Args &...>& t, index_sequence<Indices...>) { 
+    std::vector<std::vector<StubInput>> build_inputs(const std::tuple<const Args &...>& t, index_sequence<Indices...>) {
         return {build_input(Indices, std::get<Indices>(t))...};
     }
 
@@ -2492,7 +2580,7 @@ public:
     virtual ~GeneratorFactory() {}
     // Note that this method must never return null:
     // if it cannot return a valid Generator, it should assert-fail.
-    virtual std::unique_ptr<GeneratorBase> create(const GeneratorContext &context, 
+    virtual std::unique_ptr<GeneratorBase> create(const GeneratorContext &context,
                                                   const std::map<std::string, std::string> &params) const = 0;
 };
 
@@ -2544,7 +2632,7 @@ private:
 
 }  // namespace Internal
 
-template <class T> 
+template <class T>
 class Generator : public Internal::GeneratorBase {
 protected:
     Generator() :
@@ -2598,7 +2686,7 @@ private:
     Pipeline build_pipeline_impl() {
         ((T *)this)->call_generate_impl();
         ((T *)this)->call_schedule_impl();
-        return produce_pipeline();
+        return get_pipeline();
     }
 
     // Implementations for call_generate_impl(), specialized on whether we
@@ -2667,7 +2755,7 @@ private:
     void operator=(Generator&& that) = delete;
 };
 
-template <class GeneratorClass> 
+template <class GeneratorClass>
 class RegisterGenerator {
 public:
     RegisterGenerator(const char* generator_name) {

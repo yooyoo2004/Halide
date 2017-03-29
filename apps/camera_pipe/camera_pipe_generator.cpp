@@ -208,8 +208,8 @@ private:
 
 Func CameraPipe::hot_pixel_suppression(Func input) {
 
-    Expr a = max(max(input(x-2, y), input(x+2, y)),
-                 max(input(x, y-2), input(x, y+2)));
+    Expr a = max(input(x - 2, y), input(x + 2, y),
+                 input(x, y - 2), input(x, y + 2));
 
     Func denoised;
     denoised(x, y) = clamp(input(x, y), 0, a);
@@ -355,7 +355,7 @@ Func CameraPipe::build() {
         vec = 64;
     }
     denoised.compute_at(processed, yi).store_at(processed, yo)
-        .prefetch(y, 2)
+        .prefetch(input, y, 2)
         .fold_storage(y, 8)
         .tile(x, y, x, y, xi, yi, 2*vec, 2)
         .vectorize(xi)
