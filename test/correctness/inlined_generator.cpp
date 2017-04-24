@@ -35,10 +35,8 @@ public:
     }
 
     void schedule() {
-        Func(output).bound(c, 0, channels).reorder(c, x, y).unroll(c);
-        if (vectorize) {
-            Func(output).vectorize(x, natural_vector_size(output.type()));
-        }
+        output.bound(c, 0, channels).reorder(c, x, y).unroll(c);
+        output.specialize(vectorize).vectorize(x, natural_vector_size(output.type()));
     }
 
 private:

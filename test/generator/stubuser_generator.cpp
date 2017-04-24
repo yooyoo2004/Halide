@@ -53,10 +53,8 @@ public:
     }
 
     void schedule() {
-        stub
-            .set_vectorize(true)
-            .set_intermediate_level(LoopLevel(calculated_output, Var("y")))
-            .schedule();
+        stub.vectorize.set(true);
+        stub.intermediate_level.set(LoopLevel(calculated_output, Var("y")));
     }
 
 private:

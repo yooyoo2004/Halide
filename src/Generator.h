@@ -202,8 +202,10 @@
 #include <vector>
 
 #include "Func.h"
+#include "ExternalCode.h"
 #include "Introspection.h"
 #include "ObjectInstanceRegistry.h"
+#include "ScheduleParam.h"
 #include "Target.h"
 
 namespace Halide {
@@ -350,7 +352,6 @@ public:
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(uint64_t)
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(float)
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(double)
-    HALIDE_GENERATOR_PARAM_TYPED_SETTER(LoopLevel)
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(Target)
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(Type)
 
@@ -378,10 +379,6 @@ protected:
         return "";
     }
 
-    virtual bool is_schedule_param() const {
-        return false;
-    }
-
     virtual bool is_synthetic_param() const {
         return false;
     }
@@ -403,6 +400,8 @@ private:
 template<typename T>
 class GeneratorParamImpl : public GeneratorParamBase {
 public:
+    using type = T;
+
     GeneratorParamImpl(const std::string &name, const T &value) : GeneratorParamBase(name), value_(value) {}
 
     T value() const { check_value_readable(); return value_; }
@@ -425,7 +424,6 @@ public:
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(uint64_t)
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(float)
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(double)
-    HALIDE_GENERATOR_PARAM_TYPED_SETTER(LoopLevel)
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(Target)
     HALIDE_GENERATOR_PARAM_TYPED_SETTER(Type)
 
@@ -438,18 +436,18 @@ private:
     T value_;
 
     template <typename T2, typename std::enable_if<std::is_convertible<T2, T>::value>::type * = nullptr>
-    HALIDE_ALWAYS_INLINE void typed_setter_impl(const T2 &t2, const char * msg) {
+    HALIDE_ALWAYS_INLINE void typed_setter_impl(const T2 &value, const char * msg) {
         // Arithmetic types must roundtrip losslessly.
         if (!std::is_same<T, T2>::value &&
             std::is_arithmetic<T>::value &&
             std::is_arithmetic<T2>::value) {
-            const T t = t2;
-            const T2 t2a = t;
-            if (t2a != t2) {
+            const T t = Convert<T2, T>::value(value);
+            const T2 t2 = Convert<T, T2>::value(t);
+            if (t2 != value) {
                 fail_wrong_type(msg);
             }
         }
-        value_ = t2;
+        value_ = Convert<T2, T>::value(value);
     }
 
     template <typename T2, typename std::enable_if<!std::is_convertible<T2, T>::value>::type * = nullptr>
@@ -654,38 +652,10 @@ public:
 };
 
 template<typename T>
-class GeneratorParam_LoopLevel : public GeneratorParam_Enum<T> {
-public:
-    GeneratorParam_LoopLevel(const std::string &name, const std::string &def)
-        : GeneratorParam_Enum<T>(name, enum_from_string(get_halide_looplevel_enum_map(), def), get_halide_looplevel_enum_map()), def(def) {}
-
-    std::string call_to_string(const std::string &v) const override {
-        std::ostringstream oss;
-        oss << "Halide::Internal::halide_looplevel_to_enum_string(" << v << ")";
-        return oss.str();
-    }
-    std::string get_c_type() const override {
-        return "LoopLevel";
-    }
-
-    std::string get_type_decls() const override {
-        return "";
-    }
-
-    bool defined() const {
-        return this->value().defined();
-    }
-
-private:
-    const std::string def;
-};
-
-template<typename T>
 using GeneratorParamImplBase =
     typename select_type<
         cond<std::is_same<T, Target>::value,    GeneratorParam_Target<T>>,
         cond<std::is_same<T, Type>::value,      GeneratorParam_Type<T>>,
-        cond<std::is_same<T, LoopLevel>::value, GeneratorParam_LoopLevel<T>>,
         cond<std::is_same<T, bool>::value,      GeneratorParam_Bool<T>>,
         cond<std::is_arithmetic<T>::value,      GeneratorParam_Arithmetic<T>>,
         cond<std::is_enum<T>::value,            GeneratorParam_Enum<T>>
@@ -737,29 +707,6 @@ public:
         : Internal::GeneratorParamImplBase<T>(name, value) {}
 };
 
-/** ScheduleParam is similar to a GeneratorParam, with two important differences:
- *
- * (1) ScheduleParams are intended for use only within a Generator's schedule()
- * method (if any); if a Generator has no schedule() method, it should also have no
- * ScheduleParams
- *
- * (2) ScheduleParam can represent a LoopLevel, while GeneratorParam cannot.
- */
-template <typename T>
-class ScheduleParam : public GeneratorParam<T> {
-public:
-    ScheduleParam(const std::string &name, const T &value)
-        : GeneratorParam<T>(name, value) {}
-
-    ScheduleParam(const std::string &name, const T &value, const T &min, const T &max)
-        : GeneratorParam<T>(name, value, min, max) {}
-
-    ScheduleParam(const std::string &name, const std::string &value)
-        : GeneratorParam<T>(name, value) {}
-
-protected:
-    bool is_schedule_param() const override { return true; }
-};
 
 /** Addition between GeneratorParam<T> and any type that supports operator+ with T.
  * Returns type of underlying operator+. */
@@ -1664,6 +1611,7 @@ public:
     HALIDE_OUTPUT_FORWARD(serial)
     HALIDE_OUTPUT_FORWARD(shader)
     HALIDE_OUTPUT_FORWARD(specialize)
+    HALIDE_OUTPUT_FORWARD(specialize_fail)
     HALIDE_OUTPUT_FORWARD(split)
     HALIDE_OUTPUT_FORWARD(store_at)
     HALIDE_OUTPUT_FORWARD(store_root)
@@ -2137,6 +2085,26 @@ class GeneratorContext {
 public:
     virtual ~GeneratorContext() {};
     virtual Target get_target() const = 0;
+
+    using ExternsMap = std::map<std::string, ExternalCode>;
+
+    /** Generators can register ExternalCode objects onto
+     * themselves. The Generator infrastructure will arrange to have
+     * this ExternalCode appended to the Module that is finally
+     * compiled using the Generator. This allows encapsulating
+     * functionality that depends on external libraries or handwritten
+     * code for various targets. The name argument should match the
+     * name of the ExternalCode block and is used to ensure the same
+     * code block is not duplicated in the output. Halide does not do
+     * anything other than to compare names for equality. To guarantee
+     * uniqueness in public code, we suggest using a Java style
+     * inverted domain name followed by organization specific
+     * naming. E.g.:
+     *     com.yoyodyne.overthruster.0719acd19b66df2a9d8d628a8fefba911a0ab2b7
+     *
+     * See test/generator/external_code_generator.cpp for example use. */
+    virtual std::shared_ptr<ExternsMap> get_externs_map() const = 0;
+
 protected:
     friend class Internal::GeneratorBase;
     virtual std::shared_ptr<Internal::ValueTracker> get_value_tracker() const = 0;
@@ -2160,12 +2128,17 @@ class JITGeneratorContext : public GeneratorContext {
 public:
     explicit JITGeneratorContext(const Target &t)
         : target(t)
+        , externs_map(std::make_shared<ExternsMap>())
         , value_tracker(std::make_shared<Internal::ValueTracker>()) {}
     Target get_target() const override { return target; }
+    // Note that JITGeneratorContext is always "top-level", so it will never take
+    // an ExternsMap from a parent (since it has no parents).
+    std::shared_ptr<ExternsMap> get_externs_map() const override { return externs_map; }
 protected:
     std::shared_ptr<Internal::ValueTracker> get_value_tracker() const override { return value_tracker; }
 private:
     const Target target;
+    const std::shared_ptr<ExternsMap> externs_map;
     const std::shared_ptr<Internal::ValueTracker> value_tracker;
 };
 
@@ -2237,7 +2210,7 @@ public:
 
     Target get_target() const override { return target; }
 
-    EXPORT void set_generator_param_values(const std::map<std::string, std::string> &params);
+    EXPORT void set_generator_and_schedule_param_values(const std::map<std::string, std::string> &params);
 
     template<typename T>
     GeneratorBase &set_generator_param(const std::string &name, const T &value) {
@@ -2316,6 +2289,10 @@ public:
     // calling from generate() as long as all Outputs have been defined.)
     EXPORT Pipeline get_pipeline();
 
+    // Return a map in which to register external code this Generator requires
+    // at link time.
+    EXPORT std::shared_ptr<ExternsMap> get_externs_map() const override;
+
 protected:
     EXPORT GeneratorBase(size_t size, const void *introspection_helper);
     EXPORT void init_from_context(const Halide::GeneratorContext &context);
@@ -2340,6 +2317,9 @@ protected:
 
     template<typename T>
     using Output = GeneratorOutput<T>;
+
+    template<typename T>
+    using ScheduleParam = ScheduleParam<T>;
 
     // A Generator's creation and usage must go in a certain phase to ensure correctness;
     // the state machine here is advanced and checked at various points to ensure
@@ -2379,18 +2359,24 @@ private:
     struct ParamInfo {
         EXPORT ParamInfo(GeneratorBase *generator, const size_t size);
 
-        // Ordered-list  of non-null ptrs to GeneratorParam<> fields.
+        // Ordered-list of non-null ptrs to GeneratorParam<> fields.
         std::vector<Internal::GeneratorParamBase *> generator_params;
 
-        // Ordered-list  of non-null ptrs to Input<>/Output<> fields; empty if old-style Generator.
+        // Ordered-list of non-null ptrs to ScheduleParam<> fields.
+        std::vector<Internal::ScheduleParamBase *> schedule_params;
+
+        // Ordered-list of non-null ptrs to Input<>/Output<> fields; empty if old-style Generator.
         std::vector<Internal::GeneratorInputBase *> filter_inputs;
         std::vector<Internal::GeneratorOutputBase *> filter_outputs;
 
         // Ordered-list of non-null ptrs to Param<> or ImageParam<> fields; empty if new-style Generator.
         std::vector<Internal::Parameter *> filter_params;
 
-        // Convenience structure to look up GP/SP by name.
-        std::map<std::string, Internal::GeneratorParamBase *> params_by_name;
+        // Convenience structure to look up GP by name.
+        std::map<std::string, Internal::GeneratorParamBase *> generator_params_by_name;
+
+        // Convenience structure to look up SP by name.
+        std::map<std::string, Internal::ScheduleParamBase *> schedule_params_by_name;
 
     private:
         // list of synthetic GP's that we dynamically created; this list only exists to simplify
@@ -2405,6 +2391,9 @@ private:
     std::unique_ptr<ParamInfo> param_info_ptr;
 
     std::shared_ptr<Internal::ValueTracker> value_tracker;
+
+    mutable std::shared_ptr<ExternsMap> externs_map;
+
     bool inputs_set{false};
     std::string generator_name;
     Pipeline pipeline;
@@ -2412,17 +2401,8 @@ private:
     // Return our ParamInfo (lazy-initing as needed).
     EXPORT ParamInfo &param_info();
 
-    EXPORT Internal::GeneratorParamBase &find_param_by_name(const std::string &name);
-    Internal::GeneratorParamBase &find_generator_param_by_name(const std::string &name) {
-        auto &p = find_param_by_name(name);
-        internal_assert(!p.is_schedule_param());
-        return p;
-    }
-    Internal::GeneratorParamBase &find_schedule_param_by_name(const std::string &name) {
-        auto &p = find_param_by_name(name);
-        internal_assert(p.is_schedule_param());
-        return p;
-    }
+    EXPORT Internal::GeneratorParamBase &find_generator_param_by_name(const std::string &name);
+    EXPORT Internal::ScheduleParamBase &find_schedule_param_by_name(const std::string &name);
 
     EXPORT void check_scheduled(const char* m) const;
 
@@ -2598,7 +2578,7 @@ public:
         auto g = create_func(context);
         internal_assert(g.get() != nullptr);
         g->set_generator_name(generator_name);
-        g->set_generator_param_values(params);
+        g->set_generator_and_schedule_param_values(params);
         return g;
     }
 private:
@@ -2986,6 +2966,10 @@ protected:
     typedef std::function<std::unique_ptr<Internal::GeneratorBase>(const GeneratorContext&)> GeneratorFactory;
 
     EXPORT GeneratorStub(const GeneratorContext &context, GeneratorFactory generator_factory);
+
+    Internal::ScheduleParamBase &get_schedule_param(const std::string &n) const {
+        return generator->find_schedule_param_by_name(n);
+    }
 
     // Output(s)
     // TODO: identify vars used
