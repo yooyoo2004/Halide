@@ -684,7 +684,7 @@ struct NativeVector {
 
 #if __has_attribute(ext_vector_type)
     typedef ElementType_ NativeVectorType __attribute__((ext_vector_type(N), aligned(sizeof(ElementType))));
-#elif __has_attribute(vector_size)
+#elif __has_attribute(vector_size) || __GNUC__
     typedef ElementType_ NativeVectorType __attribute__((vector_size(N * sizeof(ElementType)), aligned(sizeof(ElementType))));
 #endif
 
@@ -2265,7 +2265,7 @@ void CodeGen_C::visit(const Shuffle *op) {
     if (op->vectors.size() == 2) {
         vec_args += ", " + print_expr(op->vectors[1]);
     }
-abort();
+
     do_indent();
     stream << "#if __has_builtin(__builtin_shufflevector)\n";
     do_indent();
