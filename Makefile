@@ -914,18 +914,18 @@ LIBHALIDE_DEPS ?= $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h
 $(BUILD_DIR)/GenGen.o: $(ROOT_DIR)/tools/GenGen.cpp $(INCLUDE_DIR)/Halide.h
 	@echo Building Generator shell...
 	@mkdir -p $(BUILD_DIR)
-	@$(CXX) -c $< $(TEST_CXX_FLAGS) -I$(INCLUDE_DIR) -o $@
+	$(CXX) -c $< $(TEST_CXX_FLAGS) -I$(INCLUDE_DIR) -o $@
 
 # Make an empty generator for generating runtimes.
 $(BIN_DIR)/runtime.generator: $(BUILD_DIR)/GenGen.o $(BIN_DIR)/libHalide.$(SHARED_EXT)
 	@echo Building Generator runtime...
-	@$(CXX) $< $(TEST_LD_FLAGS) -o $@
+	$(CXX) $< $(TEST_LD_FLAGS) -o $@
 
 # Generate a standalone runtime for a given target string
 $(BIN_DIR)/%/runtime.a: $(BIN_DIR)/runtime.generator
 	@echo Producing runtime for target $*...
 	@mkdir -p $(BIN_DIR)/$*
-	@$(CURDIR)/$< -r runtime -o $(CURDIR)/$(BIN_DIR)/$* target=$*
+	$(CURDIR)/$< -r runtime -o $(CURDIR)/$(BIN_DIR)/$* target=$*
 
 $(BIN_DIR)/test_internal: $(ROOT_DIR)/test/internal.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT)
 	$(CXX) $(TEST_CXX_FLAGS) $< -I$(SRC_DIR) $(TEST_LD_FLAGS) -o $@
@@ -1022,19 +1022,19 @@ endif
 # By default, %.generator is produced by building %_generator.cpp & linking with GenGen.cpp
 $(BUILD_DIR)/%_generator.o: $(ROOT_DIR)/test/generator/%_generator.cpp $(INCLUDE_DIR)/Halide.h
 	@mkdir -p $(BIN_DIR)
-	@$(CXX) $(TEST_CXX_FLAGS) -I$(INCLUDE_DIR) -I$(CURDIR)/$(FILTERS_DIR) -c $< -o $@
+	$(CXX) $(TEST_CXX_FLAGS) -I$(INCLUDE_DIR) -I$(CURDIR)/$(FILTERS_DIR) -c $< -o $@
 
 $(BIN_DIR)/%.generator: $(BUILD_DIR)/GenGen.o $(BIN_DIR)/libHalide.$(SHARED_EXT) $(BUILD_DIR)/%_generator.o $$(GENERATOR_AOT_GENERATOR_DEPS)
 	@echo Building Generator $*...
 	@mkdir -p $(BIN_DIR)
-	@$(CXX) $(filter %.cpp %.o %.a,$^) $(TEST_LD_FLAGS) -o $@
+	$(CXX) $(filter %.cpp %.o %.a,$^) $(TEST_LD_FLAGS) -o $@
 
 # By default, %.a/.h/.cpp are produced by executing %.generator. Runtimes are not included in these.
 $(FILTERS_DIR)/%.a: $$(GENERATOR_AOT_GENERATOR_EXECUTABLE) $$(GENERATOR_AOT_FILTER_DEPS)
 	@echo Executing Generator $*...
 	@mkdir -p $(FILTERS_DIR)
-	@$(CURDIR)/$< -e static_library,h,cpp -g "$(GENERATOR_AOT_GENERATOR_NAME)" -f "$(GENERATOR_AOT_FUNCNAME)" -n $* -o $(CURDIR)/$(FILTERS_DIR) target=$(GENERATOR_AOT_TARGET) $(GENERATOR_AOT_ARGS)
-	@if [ -n "$(GENERATOR_AOT_FILTER_DEPS)" ]; then $(LIBTOOL) -static -o $@ $@ $(GENERATOR_AOT_FILTER_DEPS); fi
+	$(CURDIR)/$< -e static_library,h,cpp -g "$(GENERATOR_AOT_GENERATOR_NAME)" -f "$(GENERATOR_AOT_FUNCNAME)" -n $* -o $(CURDIR)/$(FILTERS_DIR) target=$(GENERATOR_AOT_TARGET) $(GENERATOR_AOT_ARGS)
+	if [ -n "$(GENERATOR_AOT_FILTER_DEPS)" ]; then $(LIBTOOL) -static -o $@ $@ $(GENERATOR_AOT_FILTER_DEPS); fi
 
 $(FILTERS_DIR)/%.h: $(FILTERS_DIR)/%.a
 	@ # @echo $@ produced implicitly by $^
@@ -1045,13 +1045,13 @@ $(FILTERS_DIR)/%.cpp: $(FILTERS_DIR)/%.a
 $(FILTERS_DIR)/%.stub.h: $(BIN_DIR)/%.generator
 	@echo Producing Generator Stub for $*...
 	@mkdir -p $(FILTERS_DIR)
-	@$(CURDIR)/$< -n $* -o $(CURDIR)/$(FILTERS_DIR) -e cpp_stub
+	$(CURDIR)/$< -n $* -o $(CURDIR)/$(FILTERS_DIR) -e cpp_stub
 
 # Build _externs.cpp into _externs.o by default.
 $(FILTERS_DIR)/%_externs.o: $(ROOT_DIR)/test/generator/%_externs.cpp
 	@echo Building externs for Generator $*...
 	@mkdir -p $(FILTERS_DIR)
-	@$(CXX) $(TEST_CXX_FLAGS) -c $(filter-out %.h,$^) -I$(INCLUDE_DIR) -I$(FILTERS_DIR) -o $@
+	$(CXX) $(TEST_CXX_FLAGS) -c $(filter-out %.h,$^) -I$(INCLUDE_DIR) -I$(FILTERS_DIR) -o $@
 
 # ------------------------------------------------------------------------------
 
@@ -1186,18 +1186,18 @@ GENERATOR_JITTEST_DEPS=$(FILTERS_DIR)/$*.stub.h $(BUILD_DIR)/$*_generator.o
 $(BIN_DIR)/$(TARGET)/generator_aot_%: $(ROOT_DIR)/test/generator/%_aottest.cpp $(RUNTIME_EXPORTED_INCLUDES) $$(GENERATOR_AOTTEST_DEPS) $$(GENERATOR_AOTTEST_RUNTIME_LIBS)
 	@echo Building AOT test for Generator $*...
 	@mkdir -p $(BIN_DIR)/$(TARGET)
-	@$(CXX) $(GENERATOR_AOTTEST_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) $(GENERATOR_AOTTEST_INCLUDES) $(GENERATOR_AOT_LD_FLAGS) $(GENERATOR_AOTTEST_EXTRA_LD_FLAGS) -o $@
+	$(CXX) $(GENERATOR_AOTTEST_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) $(GENERATOR_AOTTEST_INCLUDES) $(GENERATOR_AOT_LD_FLAGS) $(GENERATOR_AOTTEST_EXTRA_LD_FLAGS) -o $@
 
 # Also make AOT testing targets that depends on the .cpp output (rather than .a).
 $(BIN_DIR)/$(TARGET)/generator_aotcpp_%: $(ROOT_DIR)/test/generator/%_aottest.cpp $(FILTERS_DIR)/%.cpp $(FILTERS_DIR)/%.h $(RUNTIME_EXPORTED_INCLUDES) $$(GENERATOR_AOTTEST_RUNTIME_LIBS)
 	@echo Building AOT-CPP test for Generator $*...
 	@mkdir -p $(BIN_DIR)/$(TARGET)
-	@$(CXX) $(GENERATOR_AOTTEST_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) $(GENERATOR_AOTTEST_INCLUDES) $(GENERATOR_AOT_LD_FLAGS) $(GENERATOR_AOTTEST_EXTRA_LD_FLAGS) -o $@
+	$(CXX) $(GENERATOR_AOTTEST_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) $(GENERATOR_AOTTEST_INCLUDES) $(GENERATOR_AOT_LD_FLAGS) $(GENERATOR_AOTTEST_EXTRA_LD_FLAGS) -o $@
 
 # By default, %_jittest.cpp depends on libHalide, plus the stubs for the Generator. These are external tests that use the JIT.
 $(BIN_DIR)/generator_jit_%: $(ROOT_DIR)/test/generator/%_jittest.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $$(GENERATOR_JITTEST_DEPS)
 	@echo Building JIT test for Generator $*...
-	@$(CXX) -g $(TEST_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) -I$(INCLUDE_DIR) -I$(FILTERS_DIR) -I $(ROOT_DIR)/apps/support $(TEST_LD_FLAGS) -o $@
+	$(CXX) -g $(TEST_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) -I$(INCLUDE_DIR) -I$(FILTERS_DIR) -I $(ROOT_DIR)/apps/support $(TEST_LD_FLAGS) -o $@
 
 # ------------------------------------------------------------------------------
 
@@ -1242,11 +1242,11 @@ generator_aot_multitarget: $(BIN_DIR)/$(TARGET)/generator_aot_multitarget
 $(BUILD_DIR)/RunGen.o: $(ROOT_DIR)/tools/RunGen.cpp $(RUNTIME_EXPORTED_INCLUDES)
 	@echo Building RunGen helper...
 	@mkdir -p $(BUILD_DIR)
-	@$(CXX) -c $< $(TEST_CXX_FLAGS) $(IMAGE_IO_CXX_FLAGS) -I$(INCLUDE_DIR) -I $(SRC_DIR)/runtime -I$(ROOT_DIR)/tools -o $@
+	$(CXX) -c $< $(TEST_CXX_FLAGS) $(IMAGE_IO_CXX_FLAGS) -I$(INCLUDE_DIR) -I $(SRC_DIR)/runtime -I$(ROOT_DIR)/tools -o $@
 
 $(FILTERS_DIR)/%.rungen: $(BUILD_DIR)/RunGen.o $(BIN_DIR)/$(TARGET)/runtime.a $(ROOT_DIR)/tools/RunGenStubs.cpp $(FILTERS_DIR)/%.a
 	@echo Building RunGen for Generator $*...
-	@$(CXX) -std=c++11 -DHL_RUNGEN_FILTER_HEADER=\"$*.h\" -I$(FILTERS_DIR) $^ $(GENERATOR_AOT_LD_FLAGS) $(IMAGE_IO_LIBS) -o $@
+	$(CXX) -std=c++11 -DHL_RUNGEN_FILTER_HEADER=\"$*.h\" -I$(FILTERS_DIR) $^ $(GENERATOR_AOT_LD_FLAGS) $(IMAGE_IO_LIBS) -o $@
 
 RUNARGS ?=
 
