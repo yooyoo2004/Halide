@@ -912,13 +912,11 @@ time_compilation_tests: time_compilation_correctness time_compilation_performanc
 LIBHALIDE_DEPS ?= $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h
 
 $(BUILD_DIR)/GenGen.o: $(ROOT_DIR)/tools/GenGen.cpp $(INCLUDE_DIR)/Halide.h
-	@echo Building Generator shell...
 	@mkdir -p $(BUILD_DIR)
 	$(CXX) -c $< $(TEST_CXX_FLAGS) -I$(INCLUDE_DIR) -o $@
 
 # Make an empty generator for generating runtimes.
 $(BIN_DIR)/runtime.generator: $(BUILD_DIR)/GenGen.o $(BIN_DIR)/libHalide.$(SHARED_EXT)
-	@echo Building Generator runtime...
 	$(CXX) $< $(TEST_LD_FLAGS) -o $@
 
 # Generate a standalone runtime for a given target string
@@ -1025,7 +1023,6 @@ $(BUILD_DIR)/%_generator.o: $(ROOT_DIR)/test/generator/%_generator.cpp $(INCLUDE
 	$(CXX) $(TEST_CXX_FLAGS) -I$(INCLUDE_DIR) -I$(CURDIR)/$(FILTERS_DIR) -c $< -o $@
 
 $(BIN_DIR)/%.generator: $(BUILD_DIR)/GenGen.o $(BIN_DIR)/libHalide.$(SHARED_EXT) $(BUILD_DIR)/%_generator.o $$(GENERATOR_AOT_GENERATOR_DEPS)
-	@echo Building Generator $*...
 	@mkdir -p $(BIN_DIR)
 	$(CXX) $(filter %.cpp %.o %.a,$^) $(TEST_LD_FLAGS) -o $@
 
@@ -1034,7 +1031,7 @@ $(FILTERS_DIR)/%.a: $$(GENERATOR_AOT_GENERATOR_EXECUTABLE) $$(GENERATOR_AOT_FILT
 	@echo Executing Generator $*...
 	@mkdir -p $(FILTERS_DIR)
 	$(CURDIR)/$< -e static_library,h,cpp -g "$(GENERATOR_AOT_GENERATOR_NAME)" -f "$(GENERATOR_AOT_FUNCNAME)" -n $* -o $(CURDIR)/$(FILTERS_DIR) target=$(GENERATOR_AOT_TARGET) $(GENERATOR_AOT_ARGS)
-	if [ -n "$(GENERATOR_AOT_FILTER_DEPS)" ]; then $(LIBTOOL) -static -o $@ $@ $(GENERATOR_AOT_FILTER_DEPS); fi
+	if [ -n "$(GENERATOR_AOT_FILTER_DEPS)" ]; then $(ROOT_DIR)/tools/halide_libtool.sh $@ $@ $(GENERATOR_AOT_FILTER_DEPS); fi
 
 $(FILTERS_DIR)/%.h: $(FILTERS_DIR)/%.a
 	@ # @echo $@ produced implicitly by $^
