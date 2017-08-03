@@ -1027,8 +1027,12 @@ $(BIN_DIR)/%.generator: $(BUILD_DIR)/GenGen.o $(BIN_DIR)/libHalide.$(SHARED_EXT)
 	$(CXX) $(filter %.cpp %.o %.a,$^) $(TEST_LD_FLAGS) -o $@
 
 # By default, %.a/.h/.cpp are produced by executing %.generator. Runtimes are not included in these.
+#
+# TODO: broken because secondexpansion doesn't allow recursion, so 
+# if GENERATOR_AOT_FILTER_DEPS contains a sub-filter (eg tiledblur->blur2x2)
+# it won't find it. you can 'fix' this by ensuring blur2x2 is evaluated first but
+# ewwww this is bad.
 $(FILTERS_DIR)/%.a: $$(GENERATOR_AOT_GENERATOR_EXECUTABLE) $$(GENERATOR_AOT_FILTER_DEPS)
-	@echo Executing Generator $*...
 	@mkdir -p $(FILTERS_DIR)
 	$(CURDIR)/$< -e static_library,h,cpp -g "$(GENERATOR_AOT_GENERATOR_NAME)" -f "$(GENERATOR_AOT_FUNCNAME)" -n $* -o $(CURDIR)/$(FILTERS_DIR) target=$(GENERATOR_AOT_TARGET) $(GENERATOR_AOT_ARGS)
 	if [ -n "$(GENERATOR_AOT_FILTER_DEPS)" ]; then $(ROOT_DIR)/tools/halide_libtool.sh $@ $@ $(GENERATOR_AOT_FILTER_DEPS); fi

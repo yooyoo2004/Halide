@@ -12,32 +12,54 @@
 # It is OK to have the same file as an input and output
 # (it will of course be overwritten).
 
-set -eux
+set -eu
+
+ORIG_WD=${PWD}
 
 # Output to temp file in case it's also in inputs
-OUTPUT=`mktemp`
+OUTPUT_DIR=`mktemp -d`
+OUTPUT="${OUTPUT_DIR}/tmp.a"
 
-for INPUT in ${@:2}; do
-    EXT="${INPUT##*.}"
+# $1 == destination .a
+# $2 == source .o or .a
+append_objects() {
+    local EXT="${2##*.}"
     if [[ ${EXT} == "o" ]]; then
-        Adding Input ${INPUT}
-        ar q ${OUTPUT} ${INPUT}
+        ar qS ${1} ${2}
     elif [[ ${EXT} == "a" ]]; then
-        AR_TEMP=`mktemp -d`
-        cd AR_TEMP
-        ar x ${INPUT}
-        # Insert in the same order, don't rely on glob
-        for OBJ in `ar p ${INPUT}`; do
-            echo Adding Input ${INPUT} -> ${OBJ}
-            ar q ${OUTPUT} ${OBJ}
+        local AR_TEMP=`mktemp -d`
+        cd ${AR_TEMP}
+        ar x ${2}
+        cd ${ORIG_WD}
+        # Iterate via 'ar t' rather than globbing what we extracted,
+        # so that we add in the same order.
+        local OBJ
+        for OBJ in `ar t ${2}`; do
+            if [[ "$OBJ" == */* ]]; then
+                echo "This tool does not support Archive files with partial or absolute paths" > /dev/stderr
+                exit 1
+            fi
+            if [[ ${OBJ} != "__.SYMDEF" ]]; then
+                $(append_objects ${1} ${AR_TEMP}/${OBJ})
+            fi
         done
         rm -rf ${AR_TEMP}
     else
-        echo File ${INPUT} is neither .o nor .a
+        echo ${2} is neither .o nor .a > /dev/stderr
         exit 1
     fi
+}
+
+for INPUT_ in ${@:2}; do
+    # Inputs might be relative; convert to an absolute path
+    # for ease of use with ar. Since OSX doesn't have a realpath
+    # available, we'll have to fake it: if the path doesn't begin
+    # with '/', assume it's relative and prepend PWD.
+    INPUT=`[[ $INPUT_ = /* ]] && echo "${INPUT_}" || echo "${PWD}/${INPUT_#./}"`
+    $(append_objects ${OUTPUT} ${INPUT})
 done
 
 ranlib ${OUTPUT}
 mv -f ${OUTPUT} $1
 
+rm -r ${OUTPUT_DIR}
