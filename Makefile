@@ -1347,18 +1347,15 @@ opengl_%: $(BIN_DIR)/opengl_%
 	@-echo
 
 generator_jit_%: $(BIN_DIR)/generator_jit_%
-	@echo Running JIT test for Generator $*...
-	@$(CURDIR)/$<
+	$(CURDIR)/$<
 	@-echo
 
 generator_aot_%: $(BIN_DIR)/$(TARGET)/generator_aot_%
-	@echo Running AOT test for Generator $*...
-	@$(CURDIR)/$<
+	$(CURDIR)/$<
 	@-echo
 
 generator_aotcpp_%: $(BIN_DIR)/$(TARGET)/generator_aotcpp_%
-	@echo Running AOT-CPP test for Generator $*...
-	@$(CURDIR)/$<
+	$(CURDIR)/$<
 	@-echo
 
 $(TMP_DIR)/images/%.png: $(ROOT_DIR)/tutorial/images/%.png
