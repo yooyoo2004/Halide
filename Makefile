@@ -31,7 +31,6 @@ BAZEL ?= $(shell which bazel)
 
 SHELL = bash
 CXX ?= g++
-LIBTOOL ?= libtool
 PREFIX ?= /usr/local
 LLVM_CONFIG ?= llvm-config
 LLVM_COMPONENTS= $(shell $(LLVM_CONFIG) --components)
@@ -959,7 +958,6 @@ $(BIN_DIR)/opengl_%: $(ROOT_DIR)/test/opengl/%.cpp $(BIN_DIR)/libHalide.$(SHARED
 # ------------------------------------------------------------------------------
 # Use vpath to tell which directories we want to look in for Generator sources.
 vpath %_generator.cpp $(ROOT_DIR)/test/generator/
-vpath %_externs.cpp $(ROOT_DIR)/test/generator/
 
 GENERATOR_BIN_DIR = $(BIN_DIR)
 GENERATOR_TARGET = $(TARGET)
@@ -975,6 +973,11 @@ include HalideGenerator.mk
 # ------------------------------------------------------------------------------
 
 # Customizations for the actual Generators we have in test/generator:
+
+# Build _externs.cpp into _externs.o by default.
+$(GENERATOR_FILTERS_DIR)/%_externs.o: $(ROOT_DIR)/test/generator/%_externs.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(TEST_CXX_FLAGS) -c $< -I$(INCLUDE_DIR) -I$(GENERATOR_FILTERS_DIR) -o $@
 
 $(FILTERS_DIR)/cxx_mangling.a: GENERATOR_EXTRA_FEATURES=c_plus_plus_name_mangling
 $(FILTERS_DIR)/cxx_mangling.a: GENERATOR_FUNCNAME=HalideTest::AnotherNamespace::cxx_mangling

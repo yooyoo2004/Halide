@@ -99,11 +99,6 @@ $(GENERATOR_FILTERS_DIR)/%.stub.h: $(GENERATOR_BIN_DIR)/%.generator
 	@mkdir -p $(@D)
 	$< -n $* -o $(GENERATOR_FILTERS_DIR) -e cpp_stub
 
-# Build _externs.cpp into _externs.o by default.
-$(GENERATOR_FILTERS_DIR)/%_externs.o: %_externs.cpp
-	@mkdir -p $(@D)
-	$(CXX) $(TEST_CXX_FLAGS) -c $(filter-out %.h,$^) -I$(INCLUDE_DIR) -I$(GENERATOR_FILTERS_DIR) -o $@
-
 # ------------------------------------------------------------------------------
 # Make an empty generator for generating runtimes.
 $(GENERATOR_BIN_DIR)/runtime.rgenerator: $(GENERATOR_BUILD_DIR)/GenGen.o $(LIBHALIDE_DEPS)

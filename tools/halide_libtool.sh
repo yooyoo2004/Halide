@@ -12,8 +12,7 @@
 # It is OK to have the same file as an input and output
 # (it will of course be overwritten).
 
-set -eu
-
+set -euo pipefail
 ORIG_WD=${PWD}
 
 # Output to temp file in case it's also in inputs
@@ -23,6 +22,8 @@ OUTPUT="${OUTPUT_DIR}/tmp.a"
 # $1 == destination .a
 # $2 == source .o or .a
 append_objects() {
+    # Since we are recursive, we need to do this at each level
+    set -euo pipefail
     local EXT="${2##*.}"
     if [[ ${EXT} == "o" ]]; then
         ar qS ${1} ${2}
@@ -39,7 +40,7 @@ append_objects() {
                 echo "This tool does not support Archive files with partial or absolute paths" > /dev/stderr
                 exit 1
             fi
-            if [[ ${OBJ} != "__.SYMDEF" ]]; then
+            if [[ ${OBJ} != "__.SYMDEF" && ${OBJ} != "SORTED" ]]; then
                 $(append_objects ${1} ${AR_TEMP}/${OBJ})
             fi
         done
