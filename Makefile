@@ -908,8 +908,6 @@ build_tests: $(CORRECTNESS_TESTS:$(ROOT_DIR)/test/correctness/%.cpp=$(BIN_DIR)/c
 
 time_compilation_tests: time_compilation_correctness time_compilation_performance time_compilation_generators
 
-LIBHALIDE_DEPS ?= $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h
-
 $(BIN_DIR)/test_internal: $(ROOT_DIR)/test/internal.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT)
 	$(CXX) $(TEST_CXX_FLAGS) $< -I$(SRC_DIR) $(TEST_LD_FLAGS) -o $@
 
@@ -959,14 +957,19 @@ $(BIN_DIR)/opengl_%: $(ROOT_DIR)/test/opengl/%.cpp $(BIN_DIR)/libHalide.$(SHARED
 # Use vpath to tell which directories we want to look in for Generator sources.
 vpath %_generator.cpp $(ROOT_DIR)/test/generator/
 
+GENERATOR_HALIDE_INCLUDES_DIR = $(INCLUDE_DIR)
+GENERATOR_HALIDE_TOOLS_DIR = $(ROOT_DIR)/tools
+GENERATOR_LIBHALIDE_PATH = $(BIN_DIR)/libHalide.$(SHARED_EXT)
+
 GENERATOR_BIN_DIR = $(BIN_DIR)
 GENERATOR_TARGET = $(TARGET)
 
-GENERATOR_LD_FLAGS=-lpthread $(LIBDL)
-ifneq ($(TEST_METAL), )
-# Unlike cuda and opencl, which dynamically go find the appropriate symbols, metal requires actual linking.
-GENERATOR_LD_FLAGS+=$(METAL_LD_FLAGS)
-endif
+GENERATOR_CXX_FLAGS = $(TEST_CXX_FLAGS)
+
+GENERATOR_GENERATOR_LD_FLAGS = $(TEST_LD_FLAGS)
+
+GENERATOR_IMAGE_IO_LIBS      ?= $(IMAGE_IO_LIBS)
+GENERATOR_IMAGE_IO_CXX_FLAGS ?= $(IMAGE_IO_CXX_FLAGS)
 
 include HalideGenerator.mk
 
@@ -1107,15 +1110,21 @@ GENERATOR_AOTTEST_DEPS=$(FILTERS_DIR)/$*.a $(FILTERS_DIR)/$*.h $(GENERATOR_AOTTE
 
 GENERATOR_JITTEST_DEPS=$(FILTERS_DIR)/$*.stub.h $(BUILD_DIR)/$*_generator.o
 
+GENERATOR_AOTTEST_LD_FLAGS=-lpthread $(LIBDL)
+ifneq ($(TEST_METAL), )
+# Unlike cuda and opencl, which dynamically go find the appropriate symbols, metal requires actual linking.
+GENERATOR_AOTTEST_LD_FLAGS+=$(METAL_LD_FLAGS)
+endif
+
 # By default, %_aottest.cpp depends on $(FILTERS_DIR)/%.a/.h (but not libHalide).
 $(BIN_DIR)/$(TARGET)/generator_aot_%: $(ROOT_DIR)/test/generator/%_aottest.cpp $(RUNTIME_EXPORTED_INCLUDES) $$(GENERATOR_AOTTEST_DEPS) $$(GENERATOR_AOTTEST_RUNTIME_LIBS)
 	@mkdir -p $(BIN_DIR)/$(TARGET)
-	$(CXX) $(GENERATOR_AOTTEST_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) $(GENERATOR_AOTTEST_INCLUDES) $(GENERATOR_LD_FLAGS) $(GENERATOR_AOTTEST_EXTRA_LD_FLAGS) -o $@
+	$(CXX) $(GENERATOR_AOTTEST_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) $(GENERATOR_AOTTEST_INCLUDES) $(GENERATOR_AOTTEST_LD_FLAGS) $(GENERATOR_AOTTEST_EXTRA_LD_FLAGS) -o $@
 
 # Also make AOT testing targets that depends on the .cpp output (rather than .a).
 $(BIN_DIR)/$(TARGET)/generator_aotcpp_%: $(ROOT_DIR)/test/generator/%_aottest.cpp $(FILTERS_DIR)/%.cpp $(FILTERS_DIR)/%.h $(RUNTIME_EXPORTED_INCLUDES) $$(GENERATOR_AOTTEST_RUNTIME_LIBS)
 	@mkdir -p $(BIN_DIR)/$(TARGET)
-	$(CXX) $(GENERATOR_AOTTEST_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) $(GENERATOR_AOTTEST_INCLUDES) $(GENERATOR_LD_FLAGS) $(GENERATOR_AOTTEST_EXTRA_LD_FLAGS) -o $@
+	$(CXX) $(GENERATOR_AOTTEST_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) $(GENERATOR_AOTTEST_INCLUDES) $(GENERATOR_AOTTEST_LD_FLAGS) $(GENERATOR_AOTTEST_EXTRA_LD_FLAGS) -o $@
 
 # By default, %_jittest.cpp depends on libHalide, plus the stubs for the Generator. These are external tests that use the JIT.
 $(BIN_DIR)/generator_jit_%: $(ROOT_DIR)/test/generator/%_jittest.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $$(GENERATOR_JITTEST_DEPS)
@@ -1163,7 +1172,7 @@ $(BIN_DIR)/tutorial_%: $(ROOT_DIR)/tutorial/%.cpp $(BIN_DIR)/libHalide.$(SHARED_
 		export LESSON=`echo $${TUTORIAL} | cut -b1-9`; \
 		make -f $(THIS_MAKEFILE) tutorial_$${TUTORIAL/run/generate}; \
 		$(CXX) $(TUTORIAL_CXX_FLAGS) $(IMAGE_IO_CXX_FLAGS) $(OPTIMIZE) $< \
-		-I$(TMP_DIR) -I$(INCLUDE_DIR) $(TMP_DIR)/$${LESSON}_*.a $(GENERATOR_LD_FLAGS) $(IMAGE_IO_LIBS) -lz -o $@; \
+		-I$(TMP_DIR) -I$(INCLUDE_DIR) $(TMP_DIR)/$${LESSON}_*.a $(GENERATOR_AOTTEST_LD_FLAGS) $(IMAGE_IO_LIBS) -lz -o $@; \
 	else \
 		$(CXX) $(TUTORIAL_CXX_FLAGS) $(IMAGE_IO_CXX_FLAGS) $(OPTIMIZE) $< \
 		-I$(INCLUDE_DIR) -I$(ROOT_DIR)/tools $(TEST_LD_FLAGS) $(IMAGE_IO_LIBS) -o $@;\

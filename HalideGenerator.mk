@@ -1,19 +1,5 @@
 # ------------------------------------------------------------------------------
 
-CXX ?= error-must-define-CXX
-
-GENERATOR_TARGET 	  ?= error-must-define-GENERATOR_TARGET
-
-GENERATOR_BIN_DIR 	  ?= error-must-define-GENERATOR_BIN_DIR
-GENERATOR_BUILD_DIR   = $(GENERATOR_BIN_DIR)/build
-GENERATOR_FILTERS_DIR = $(GENERATOR_BIN_DIR)/$(GENERATOR_TARGET)/build
-
-INCLUDE_DIR ?=
-LIBHALIDE_DEPS ?= 
-TEST_CXX_FLAGS ?=
-TEST_LD_FLAGS ?=
-TOOLS_DIR ?= $(ROOT_DIR)/tools
-
 # General rules for building Generators. These are targeted at the
 # Generators in test/generator, but can (and should) be generalized elsewhere.
 
@@ -23,6 +9,24 @@ TOOLS_DIR ?= $(ROOT_DIR)/tools
 #
 # Note that we need SECONDEXPANSION enabled several of these to work.
 .SECONDEXPANSION:
+
+CXX                           ?= error-must-define-CXX
+GENERATOR_HALIDE_INCLUDES_DIR ?= error-must-define-GENERATOR_HALIDE_INCLUDES_DIR
+GENERATOR_HALIDE_TOOLS_DIR    ?= error-must-define-GENERATOR_HALIDE_TOOLS_DIR
+GENERATOR_LIBHALIDE_PATH      ?= error-must-define-GENERATOR_LIBHALIDE_PATH
+GENERATOR_TARGET 	          ?= error-must-define-GENERATOR_TARGET
+GENERATOR_BIN_DIR 	          ?= error-must-define-GENERATOR_BIN_DIR
+
+GENERATOR_BUILD_DIR   = $(GENERATOR_BIN_DIR)/build
+GENERATOR_FILTERS_DIR = $(GENERATOR_BIN_DIR)/$(GENERATOR_TARGET)/build
+
+GENERATOR_CXX_FLAGS          ?=
+GENERATOR_GENERATOR_LD_FLAGS ?=
+
+GENERATOR_HALIDE_H_PATH ?= $(GENERATOR_HALIDE_INCLUDES_DIR)/Halide.h
+
+GENERATOR_IMAGE_IO_LIBS      ?= 
+GENERATOR_IMAGE_IO_CXX_FLAGS ?= 
 
 # Default features to add to the Generator's Halide target.
 GENERATOR_EXTRA_FEATURES ?=
@@ -52,26 +56,24 @@ GENERATOR_FILTER_DEPS ?=
 # from the same Generator (by changing target, generator_args, etc)
 GENERATOR_GENERATOR_EXECUTABLE=$(GENERATOR_BIN_DIR)/$*.generator
 
-GENERATOR_LD_FLAGS ?=
-
 GENERATOR_RUNTIME_LIB = $(GENERATOR_FILTERS_DIR)/runtime.a
 
 # ------------------------------------------------------------------------------
 
-$(GENERATOR_BUILD_DIR)/GenGen.o: $(TOOLS_DIR)/GenGen.cpp $(INCLUDE_DIR)/Halide.h
+$(GENERATOR_BUILD_DIR)/GenGen.o: $(GENERATOR_HALIDE_TOOLS_DIR)/GenGen.cpp $(GENERATOR_HALIDE_INCLUDES_DIR)/Halide.h
 	@mkdir -p $(@D)
-	$(CXX) -c $< $(TEST_CXX_FLAGS) -I$(INCLUDE_DIR) -o $@
+	$(CXX) -c $< $(GENERATOR_CXX_FLAGS) -I$(GENERATOR_HALIDE_INCLUDES_DIR) -o $@
 
 # ------------------------------------------------------------------------------
 
 # By default, %.generator is produced by building %_generator.cpp & linking with GenGen.cpp
-$(GENERATOR_BUILD_DIR)/%_generator.o: %_generator.cpp $(INCLUDE_DIR)/Halide.h
+$(GENERATOR_BUILD_DIR)/%_generator.o: %_generator.cpp $(GENERATOR_HALIDE_INCLUDES_DIR)/Halide.h
 	@mkdir -p $(@D)
-	$(CXX) $(TEST_CXX_FLAGS) -I$(INCLUDE_DIR) -I$(GENERATOR_FILTERS_DIR) -c $< -o $@
+	$(CXX) $(GENERATOR_CXX_FLAGS) -I$(GENERATOR_HALIDE_INCLUDES_DIR) -I$(GENERATOR_FILTERS_DIR) -c $< -o $@
 
-$(GENERATOR_BIN_DIR)/%.generator: $(GENERATOR_BUILD_DIR)/GenGen.o $(LIBHALIDE_DEPS) $(GENERATOR_BUILD_DIR)/%_generator.o $$(GENERATOR_GENERATOR_DEPS)
+$(GENERATOR_BIN_DIR)/%.generator: $(GENERATOR_BUILD_DIR)/GenGen.o $(GENERATOR_LIBHALIDE_PATH) $(GENERATOR_HALIDE_H_PATH) $(GENERATOR_BUILD_DIR)/%_generator.o $$(GENERATOR_GENERATOR_DEPS)
 	@mkdir -p $(@D)
-	$(CXX) $(filter %.cpp %.o %.a,$^) $(TEST_LD_FLAGS) -o $@
+	$(CXX) $(filter %.cpp %.o %.a,$^) $(GENERATOR_GENERATOR_LD_FLAGS) -o $@
 
 # Don't automatically delete Generators, since we may invoke the same one multiple
 # times with different arguments.
@@ -87,7 +89,7 @@ $(GENERATOR_BIN_DIR)/%.generator: $(GENERATOR_BUILD_DIR)/GenGen.o $(LIBHALIDE_DE
 $(GENERATOR_FILTERS_DIR)/%.a: $$(GENERATOR_GENERATOR_EXECUTABLE) $$(GENERATOR_FILTER_DEPS)
 	@mkdir -p $(@D)
 	$< -e static_library,h,cpp -g "$(GENERATOR_GENERATOR_NAME)" -f "$(GENERATOR_FUNCNAME)" -n $* -o $(GENERATOR_FILTERS_DIR) target=$(GENERATOR_TARGET_WITH_FEATURES) $(GENERATOR_ARGS)
-	if [ -n "$(GENERATOR_FILTER_DEPS)" ]; then $(TOOLS_DIR)/halide_libtool.sh $@ $@ $(GENERATOR_FILTER_DEPS); fi
+	if [ -n "$(GENERATOR_FILTER_DEPS)" ]; then $(GENERATOR_HALIDE_TOOLS_DIR)/halide_libtool.sh $@ $@ $(GENERATOR_FILTER_DEPS); fi
 
 $(GENERATOR_FILTERS_DIR)/%.h: $(GENERATOR_FILTERS_DIR)/%.a
 	@ # @echo $@ produced implicitly by $^
@@ -101,9 +103,9 @@ $(GENERATOR_FILTERS_DIR)/%.stub.h: $(GENERATOR_BIN_DIR)/%.generator
 
 # ------------------------------------------------------------------------------
 # Make an empty generator for generating runtimes.
-$(GENERATOR_BIN_DIR)/runtime.rgenerator: $(GENERATOR_BUILD_DIR)/GenGen.o $(LIBHALIDE_DEPS)
+$(GENERATOR_BIN_DIR)/runtime.rgenerator: $(GENERATOR_BUILD_DIR)/GenGen.o $(GENERATOR_LIBHALIDE_PATH) $(GENERATOR_HALIDE_H_PATH)
 	@mkdir -p $(@D)
-	$(CXX) $(filter-out %.h,$^) $(TEST_LD_FLAGS) -o $@
+	$(CXX) $(filter-out %.h,$^) $(GENERATOR_GENERATOR_LD_FLAGS) -o $@
 
 # Generate a standalone runtime for a given target string
 # Note that this goes into GENERATOR_FILTERS_DIR, but we define the rule
@@ -118,12 +120,12 @@ $(GENERATOR_BIN_DIR)/%/build/runtime.a: $(GENERATOR_BIN_DIR)/runtime.rgenerator
 # Rules for the "RunGen" utility, which lets most Generators run via
 # standard command-line tools.
 
-$(GENERATOR_BUILD_DIR)/RunGen.o: $(TOOLS_DIR)/RunGen.cpp $(RUNTIME_EXPORTED_INCLUDES)
+$(GENERATOR_BUILD_DIR)/RunGen.o: $(GENERATOR_HALIDE_TOOLS_DIR)/RunGen.cpp $(GENERATOR_HALIDE_INCLUDES_DIR)/HalideRuntime.h
 	@mkdir -p $(@D)
-	$(CXX) -c $< $(TEST_CXX_FLAGS) $(IMAGE_IO_CXX_FLAGS) -I$(INCLUDE_DIR) -I $(SRC_DIR)/runtime -I$(TOOLS_DIR) -o $@
+	$(CXX) -c $< $(GENERATOR_CXX_FLAGS) $(GENERATOR_IMAGE_IO_CXX_FLAGS) -I$(GENERATOR_HALIDE_INCLUDES_DIR) -I$(GENERATOR_HALIDE_TOOLS_DIR) -o $@
 
-$(GENERATOR_BIN_DIR)/%.rungen: $(GENERATOR_BUILD_DIR)/RunGen.o $(GENERATOR_FILTERS_DIR)/runtime.a $(TOOLS_DIR)/RunGenStubs.cpp $(GENERATOR_FILTERS_DIR)/%.a
-	$(CXX) -std=c++11 -DHL_RUNGEN_FILTER_HEADER=\"$*.h\" -I$(GENERATOR_FILTERS_DIR) $^ $(GENERATOR_LD_FLAGS) $(IMAGE_IO_LIBS) -o $@
+$(GENERATOR_BIN_DIR)/%.rungen: $(GENERATOR_BUILD_DIR)/RunGen.o $(GENERATOR_FILTERS_DIR)/runtime.a $(GENERATOR_HALIDE_TOOLS_DIR)/RunGenStubs.cpp $(GENERATOR_FILTERS_DIR)/%.a
+	$(CXX) -std=c++11 -DHL_RUNGEN_FILTER_HEADER=\"$*.h\" -I$(GENERATOR_FILTERS_DIR) $^ $(GENERATOR_IMAGE_IO_CXX_FLAGS) $(GENERATOR_IMAGE_IO_LIBS) -o $@
 
 # Don't automatically delete RunGen, since we may invoke the same one multiple times with different arguments.
 # (Really, .SECONDARY is what we want, but it won't accept wildcards)
@@ -138,6 +140,7 @@ $(GENERATOR_BIN_DIR)/%.run: $(GENERATOR_BIN_DIR)/%.rungen
 
 clean_generators:
 	rm -rf $(GENERATOR_BIN_DIR)/*.generator
+	rm -rf $(GENERATOR_BIN_DIR)/*.rungen
 	rm -rf $(GENERATOR_BIN_DIR)/*/runtime.a
 	rm -rf $(GENERATOR_BIN_DIR)/*/build/runtime.a
 	rm -rf $(GENERATOR_FILTERS_DIR)

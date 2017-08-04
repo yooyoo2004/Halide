@@ -3,13 +3,15 @@ include ../support/Makefile.inc
 GENERATOR_BIN_DIR = $(BIN)
 GENERATOR_TARGET = $(HL_TARGET)
 
-TEST_CXX_FLAGS = $(CXXFLAGS)
-TEST_LD_FLAGS = $(LDFLAGS) $(HALIDE_SYSTEM_LDFLAGS)
-INCLUDE_DIR = $(HALIDE_SRC_PATH)/include
-TOOLS_DIR = $(HALIDE_SRC_PATH)/tools
+GENERATOR_GENERATOR_LD_FLAGS = $(LDFLAGS) $(HALIDE_SYSTEM_LDFLAGS)
+GENERATOR_CXX_FLAGS = $(CXXFLAGS)
+GENERATOR_HALIDE_TOOLS_DIR = $(HALIDE_SRC_PATH)/tools
+GENERATOR_HALIDE_INCLUDES_DIR = $(HALIDE_SRC_PATH)/include
+GENERATOR_LIBHALIDE_PATH = $(LIB_HALIDE)
+
 include ../../HalideGenerator.mk
 
-all: $(BIN)/filter $(BIN)/out.png $(BIN)/filter_viz
+all: $(BIN)/filter $(BIN)/out.png $(BIN)/filter_viz 
 
 # Same Generator, different features
 $(GENERATOR_FILTERS_DIR)/bilateral_grid_viz.a: GENERATOR_GENERATOR_EXECUTABLE=$(GENERATOR_BIN_DIR)/bilateral_grid.generator
