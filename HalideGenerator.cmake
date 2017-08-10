@@ -1,33 +1,31 @@
 include(CMakeParseArguments)
 
-function(halide_generator_genfiles_dir NAME OUTVAR)
+function(_halide_generator_genfiles_dir NAME OUTVAR)
   set(GENFILES_DIR "${CMAKE_BINARY_DIR}/generator_genfiles/${NAME}")
   file(MAKE_DIRECTORY "${GENFILES_DIR}")
   set(${OUTVAR} "${GENFILES_DIR}" PARENT_SCOPE)
 endfunction()
 
-function(halide_generator_get_exec_path TARGET OUTVAR)
-  if(MSVC)
-    # In MSVC, the generator executable will be placed in a configuration specific
-    # directory specified by ${CMAKE_CFG_INTDIR}.
-    set(${OUTVAR} "${CMAKE_BINARY_DIR}/bin/${CMAKE_CFG_INTDIR}/${TARGET}${CMAKE_EXECUTABLE_SUFFIX}" PARENT_SCOPE)
-  elseif(XCODE)
-    # In Xcode, the generator executable will be placed in a configuration specific
-    # directory, so the Xcode variable $(CONFIGURATION) is passed in the custom build script.
-    set(${OUTVAR} "${CMAKE_BINARY_DIR}/bin/$(CONFIGURATION)/${TARGET}${CMAKE_EXECUTABLE_SUFFIX}" PARENT_SCOPE)
-  else()
-    set(${OUTVAR} "${CMAKE_BINARY_DIR}/bin/${TARGET}${CMAKE_EXECUTABLE_SUFFIX}" PARENT_SCOPE)
-  endif()
-endfunction()
-
-function(halide_generator_add_exec_generator_target EXEC_TARGET)
+function(_halide_generator_add_exec_generator_target EXEC_TARGET)
   set(options )
   set(oneValueArgs GENERATOR_TARGET GENFILES_DIR)
   set(multiValueArgs OUTPUTS GENERATOR_ARGS)
   cmake_parse_arguments(args "" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
-  halide_generator_get_exec_path(${args_GENERATOR_TARGET} EXEC_PATH)
+  if(MSVC)
+    # In MSVC, the generator executable will be placed in a configuration specific
+    # directory specified by ${CMAKE_CFG_INTDIR}.
+    set(EXEC_PATH "${CMAKE_BINARY_DIR}/bin/${CMAKE_CFG_INTDIR}/${args_GENERATOR_TARGET}${CMAKE_EXECUTABLE_SUFFIX}")
+  elseif(XCODE)
+    # In Xcode, the generator executable will be placed in a configuration specific
+    # directory, so the Xcode variable $(CONFIGURATION) is passed in the custom build script.
+    set(EXEC_PATH "${CMAKE_BINARY_DIR}/bin/$(CONFIGURATION)/${args_GENERATOR_TARGET}${CMAKE_EXECUTABLE_SUFFIX}")
+  else()
+    set(EXEC_PATH "${CMAKE_BINARY_DIR}/bin/${args_GENERATOR_TARGET}${CMAKE_EXECUTABLE_SUFFIX}")
+  endif()
 
+  # This "target" will always be built.
+  add_custom_target(${EXEC_TARGET} DEPENDS ${args_OUTPUTS})
   add_custom_command(
     OUTPUT ${args_OUTPUTS}
     DEPENDS ${args_GENERATOR_TARGET}
@@ -35,8 +33,6 @@ function(halide_generator_add_exec_generator_target EXEC_TARGET)
     WORKING_DIRECTORY ${args_GENFILES_DIR}
     COMMENT "Executing Generator ${args_GENERATOR_TARGET} with args ${args_GENERATOR_ARGS}..."
   )
-
-  add_custom_target(${EXEC_TARGET} DEPENDS ${args_OUTPUTS})
   set_target_properties(${EXEC_TARGET} PROPERTIES FOLDER "generator")
 endfunction()
 
@@ -78,7 +74,7 @@ function(halide_add_aot_library AOT_LIBRARY_TARGET)
   endif()
 
   # Create a directory to contain generator specific intermediate files
-  halide_generator_genfiles_dir(${AOT_LIBRARY_TARGET} GENFILES_DIR)
+  _halide_generator_genfiles_dir(${AOT_LIBRARY_TARGET} GENFILES_DIR)
 
   # Determine the name of the output files
   set(FILTER_LIB "${AOT_LIBRARY_TARGET}${CMAKE_STATIC_LIBRARY_SUFFIX}")
@@ -122,7 +118,7 @@ function(halide_add_aot_library AOT_LIBRARY_TARGET)
     set_source_files_properties("${GENFILES_DIR}/${FILTER_HDR}" PROPERTIES GENERATED TRUE)
   endif()
 
-  halide_generator_add_exec_generator_target(
+  _halide_generator_add_exec_generator_target(
     "${AOT_LIBRARY_TARGET}.exec_generator"
     GENERATOR_TARGET ${args_GENERATOR_TARGET} 
     GENERATOR_ARGS   "${GENERATOR_EXEC_ARGS}"
@@ -148,14 +144,12 @@ function(halide_add_aot_library AOT_LIBRARY_TARGET)
                     DEPENDS "${RUNGEN}")
   set_target_properties("${AOT_LIBRARY_TARGET}.run" PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
-  # ---------
-
 endfunction(halide_add_aot_library)
 
 # Usage:
 #   halide_add_aot_library_dependency(TARGET AOT_LIBRARY_TARGET)
 function(halide_add_aot_library_dependency TARGET AOT_LIBRARY_TARGET)
-    halide_generator_genfiles_dir(${AOT_LIBRARY_TARGET} GENFILES_DIR)
+    _halide_generator_genfiles_dir(${AOT_LIBRARY_TARGET} GENFILES_DIR)
   
     add_dependencies("${TARGET}" "${AOT_LIBRARY_TARGET}.exec_generator")
 
@@ -176,7 +170,7 @@ function(halide_add_aot_library_dependency TARGET AOT_LIBRARY_TARGET)
         set_target_properties("${TARGET}" PROPERTIES LINK_FLAGS "-Wl,--allow-multiple-definition")
       endif()
     else()
-      target_link_libraries("${TARGET}" PRIVATE dl pthread z)
+      target_link_libraries("${TARGET}" PRIVATE dl pthread)
     endif()
 endfunction(halide_add_aot_library_dependency)
 
@@ -231,7 +225,7 @@ function(halide_add_generator_stub_library)
   set(multiValueArgs )
   cmake_parse_arguments(args "" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
-  halide_generator_genfiles_dir(${args_STUB_GENERATOR_TARGET} GENFILES_DIR)
+  _halide_generator_genfiles_dir(${args_STUB_GENERATOR_TARGET} GENFILES_DIR)
 
   # STUBNAME_BASE = strip_suffix(STUB_GENERATOR_TARGET, ".generator")
   string(REGEX REPLACE "\\.generator*$" "" STUBNAME_BASE ${args_STUB_GENERATOR_TARGET})
@@ -244,8 +238,8 @@ function(halide_add_generator_stub_library)
     list(APPEND GENERATOR_EXEC_ARGS "-n" "${STUBNAME_BASE}")
   endif()
 
-  set(STUBGEN "${args_STUB_GENERATOR_TARGET}.exec_stub_generator")
-  halide_generator_add_exec_generator_target(${STUBGEN}
+  _halide_generator_add_exec_generator_target(
+    "${args_STUB_GENERATOR_TARGET}.exec_stub_generator"
     GENERATOR_TARGET ${args_STUB_GENERATOR_TARGET} 
     GENERATOR_ARGS   "${GENERATOR_EXEC_ARGS}"
     GENFILES_DIR     ${GENFILES_DIR}
@@ -261,8 +255,17 @@ function(halide_add_generator_stub_dependency)
   set(multiValueArgs )
   cmake_parse_arguments(args "" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
-  halide_generator_genfiles_dir(${args_STUB_GENERATOR_TARGET} GENFILES_DIR)
-  set(STUBGEN "${args_STUB_GENERATOR_TARGET}.exec_stub_generator")
-  add_dependencies("${args_TARGET}" ${STUBGEN})
+  _halide_generator_genfiles_dir(${args_STUB_GENERATOR_TARGET} GENFILES_DIR)
+  add_dependencies("${args_TARGET}" "${args_STUB_GENERATOR_TARGET}.exec_stub_generator")
   target_include_directories("${args_TARGET}" PRIVATE "${GENFILES_DIR}")
 endfunction(halide_add_generator_stub_dependency)
+
+function(halide_add_aot_cpp_dependency TARGET AOT_LIBRARY_TARGET)
+    _halide_generator_genfiles_dir(${AOT_LIBRARY_TARGET} GENFILES_DIR)
+    add_dependencies("${TARGET}" "${AOT_LIBRARY_TARGET}.exec_generator")
+
+    add_library(${AOT_LIBRARY_TARGET}.cpplib STATIC "${GENFILES_DIR}/${AOT_LIBRARY_TARGET}.cpp")
+    target_link_libraries("${TARGET}" PRIVATE ${AOT_LIBRARY_TARGET}.cpplib)
+    target_include_directories("${TARGET}" PRIVATE "${GENFILES_DIR}")
+endfunction(halide_add_aot_cpp_dependency)
+
