@@ -6,13 +6,13 @@ if (OpenGL_FOUND)
     halide_generator(halide_blur_glsl.generator
                          SRCS halide_blur_glsl_generator.cpp)
     halide_library_from_generator(halide_blur_glsl
-                           GENERATOR_TARGET halide_blur_glsl.generator
+                           GENERATOR halide_blur_glsl.generator
                            GENERATOR_ARGS target=host-opengl-debug)
 
     halide_generator(halide_ycc_glsl.generator
                          SRCS halide_ycc_glsl_generator.cpp)
     halide_library_from_generator(halide_ycc_glsl
-                           GENERATOR_TARGET halide_ycc_glsl.generator
+                           GENERATOR halide_ycc_glsl.generator
                            GENERATOR_ARGS target=host-opengl-debug)
 
     # Final executable

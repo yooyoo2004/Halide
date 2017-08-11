@@ -125,7 +125,7 @@ function(halide_define_aot_test NAME)
 
     set(AOT_LIBRARY_TARGET "${NAME}")
     halide_library_from_generator("${AOT_LIBRARY_TARGET}"
-                           GENERATOR_TARGET "${NAME}.generator"
+                           GENERATOR "${NAME}.generator"
                            GENERATOR_NAME "${args_GENERATOR_NAME}"
                            GENERATED_FUNCTION "${args_GENERATED_FUNCTION}"
                            GENERATOR_ARGS "target=${args_GENERATOR_HALIDE_TARGET}" "${args_GENERATOR_ARGS}"
@@ -139,14 +139,14 @@ endfunction(halide_define_aot_test)
 
 function(halide_add_aot_test_dependency NAME)
   set(options )
-  set(oneValueArgs AOT_LIBRARY_TARGET GENERATED_FUNCTION GENERATOR_NAME GENERATOR_TARGET GENERATOR_HALIDE_TARGET)
+  set(oneValueArgs AOT_LIBRARY_TARGET GENERATED_FUNCTION GENERATOR_NAME GENERATOR GENERATOR_HALIDE_TARGET)
   set(multiValueArgs GENERATOR_ARGS)
   cmake_parse_arguments(args "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
   set(TARGET "generator_aot_${NAME}")
 
-  if (NOT args_GENERATOR_TARGET)
-    set(args_GENERATOR_TARGET "${NAME}")
+  if (NOT args_GENERATOR)
+    set(args_GENERATOR "${NAME}")
   endif()
   if (NOT args_GENERATED_FUNCTION)
     set(args_GENERATED_FUNCTION "${args_AOT_LIBRARY_TARGET}")
@@ -156,7 +156,7 @@ function(halide_add_aot_test_dependency NAME)
     endif()
 
   halide_library_from_generator("${args_AOT_LIBRARY_TARGET}"
-                         GENERATOR_TARGET "${args_GENERATOR_TARGET}.generator"
+                         GENERATOR "${args_GENERATOR}.generator"
                          GENERATOR_NAME "${args_GENERATOR_NAME}"
                          GENERATED_FUNCTION "${args_GENERATED_FUNCTION}"
                          GENERATOR_ARGS "target=${args_GENERATOR_HALIDE_TARGET}" "${args_GENERATOR_ARGS}")
@@ -312,7 +312,7 @@ if (WITH_TEST_GENERATORS)
 
   halide_define_aot_test(tiled_blur)
   halide_add_aot_test_dependency(tiled_blur
-                                 GENERATOR_TARGET blur2x2
+                                 GENERATOR blur2x2
                                  AOT_LIBRARY_TARGET blur2x2)
 
   add_library(cxx_mangling_define_extern_externs 

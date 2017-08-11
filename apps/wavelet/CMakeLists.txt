@@ -61,7 +61,7 @@ foreach(GEN_SRC ${GENS})
     halide_generator("${GEN_EXECUTABLE}" SRCS ${GEN_SRC} LIBHALIDE ${HALIDE_SRC_DIR}/lib/libHalide.a)
 
     halide_library_from_generator("${GEN_NAME}"
-                           GENERATOR_TARGET ${GEN_EXECUTABLE}
+                           GENERATOR ${GEN_EXECUTABLE}
                            GENERATOR_NAME ${GEN_NAME}
                            GENERATED_FUNCTION ${GEN_NAME}
                            GENERATOR_ARGS "target=host")

@@ -2,7 +2,7 @@
 halide_generator(local_laplacian.generator
                      SRCS local_laplacian_generator.cpp)
 halide_library_from_generator(local_laplacian
-                       GENERATOR_TARGET local_laplacian.generator
+                       GENERATOR local_laplacian.generator
                        GENERATOR_ARGS target=host)
 
 # Final executable

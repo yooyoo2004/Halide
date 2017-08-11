@@ -2,7 +2,7 @@
 halide_generator(camera_pipe.generator
                      SRCS camera_pipe_generator.cpp)
 halide_library_from_generator(camera_pipe
-                       GENERATOR_TARGET camera_pipe.generator
+                       GENERATOR camera_pipe.generator
                        GENERATOR_ARGS target=host)
 
 # fcam
