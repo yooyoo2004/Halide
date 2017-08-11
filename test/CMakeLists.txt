@@ -66,42 +66,24 @@ if (WITH_TEST_OPENGL)
 endif()
 
 function(add_test_generator NAME)
-  set(options WITH_STUB)
-  set(oneValueArgs GENERATOR_NAME)
-  set(multiValueArgs STUB_DEPS)
+  set(multiValueArgs DEPS)
   cmake_parse_arguments(args "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
-  # convert TRUE|FALSE -> WITH_STUB|emptystring
-  if (${args_WITH_STUB})
-    set(args_WITH_STUB WITH_STUB)
-  else()
-    set(args_WITH_STUB )
-  endif()
   halide_add_generator("${NAME}.generator"
-                       STUB_GENERATOR_NAME "${args_GENERATOR_NAME}"
                        SRCS "${CMAKE_CURRENT_SOURCE_DIR}/generator/${NAME}_generator.cpp"
-                       STUB_DEPS ${args_STUB_DEPS}
-                       ${args_WITH_STUB})
+                       DEPS ${args_DEPS})
 endfunction(add_test_generator)
 
 function(halide_define_jit_test NAME)
   set(options )
   set(oneValueArgs )
-  set(multiValueArgs STUB_DEPS)
+  set(multiValueArgs DEPS)
   cmake_parse_arguments(args "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
-
-  set(ALLSTUBS )
-  foreach(STUB ${args_STUB_DEPS})
-    list(APPEND ALLSTUBS $<TARGET_OBJECTS:${STUB}.objlib>)
-  endforeach()
 
   halide_project("generator_jit_${NAME}"
                  "generator"
                  "${CMAKE_CURRENT_SOURCE_DIR}/generator/${NAME}_jittest.cpp"
                  ${ALLSTUBS})
-  foreach(STUB_DEP ${args_STUB_DEPS})
-    halide_add_generator_stub_dependency(TARGET "generator_jit_${NAME}"
-                                         STUB_GENERATOR_TARGET ${STUB_DEP})
-  endforeach()
+  target_link_libraries("generator_jit_${NAME}" PRIVATE ${args_DEPS})
 endfunction(halide_define_jit_test)
 
 include(../HalideGenerator.cmake)
@@ -115,7 +97,7 @@ include(../HalideGenerator.cmake)
 function(halide_define_aot_test NAME)
   set(options OMIT_DEFAULT_GENERATOR)
   set(oneValueArgs GENERATED_FUNCTION GENERATOR_NAME GENERATOR_HALIDE_TARGET)
-  set(multiValueArgs GENERATOR_ARGS STUB_DEPS FILTER_DEPS)
+  set(multiValueArgs GENERATOR_ARGS DEPS FILTER_DEPS)
   cmake_parse_arguments(args "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
   set(TARGET "generator_aot_${NAME}")
@@ -125,10 +107,6 @@ function(halide_define_aot_test NAME)
   target_include_directories("${TARGET}" PRIVATE "${CMAKE_SOURCE_DIR}/src/runtime")
   target_include_directories("${TARGET}" PRIVATE "${CMAKE_SOURCE_DIR}")
   set_target_properties("${TARGET}" PROPERTIES FOLDER "generator")
-  foreach(STUB_DEP ${args_STUB_DEPS})
-    halide_add_generator_stub_dependency(TARGET "${TARGET}"
-                                         STUB_GENERATOR_TARGET ${STUB_DEP})
-  endforeach()
   if (MSVC)
     # 4088: "/FORCE used, image may not work"
     set_target_properties("${TARGET}" PROPERTIES LINK_FLAGS "/ignore:4088")
@@ -198,7 +176,7 @@ if (WITH_TEST_GENERATORS)
   add_test_generator(define_extern_opencl)
   add_test_generator(embed_image)
   add_test_generator(error_codes)
-  add_test_generator(example WITH_STUB)
+  add_test_generator(example)
   add_test_generator(float16_t)
   add_test_generator(gpu_object_lifetime)
   add_test_generator(gpu_only)
@@ -211,12 +189,10 @@ if (WITH_TEST_GENERATORS)
   add_test_generator(multitarget)
   add_test_generator(nested_externs)
   add_test_generator(pyramid)
-  add_test_generator(stubtest WITH_STUB
-                     GENERATOR_NAME StubNS1::StubNS2::StubTest)
+  add_test_generator(stubtest)
   # the stubuser generator needs the stub from stubtest
   add_test_generator(stubuser
-                     GENERATOR_NAME stubuser
-                     STUB_DEPS stubtest.generator)
+                     DEPS stubtest.generator)
   add_test_generator(blur2x2)
   add_test_generator(tiled_blur)
   add_test_generator(user_context)
@@ -225,9 +201,9 @@ if (WITH_TEST_GENERATORS)
 
   # ------ Generator tests for just-in-time mode: ------
   halide_define_jit_test(example
-                         STUB_DEPS example.generator)
+                         DEPS example.generator)
   halide_define_jit_test(stubtest
-                         STUB_DEPS stubtest.generator)
+                         DEPS stubtest.generator)
 
   # ------ Generator tests for ahead-of-time mode: ------
 

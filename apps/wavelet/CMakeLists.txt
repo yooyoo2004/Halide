@@ -15,12 +15,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 function(use_image_io TARGET)
-  target_compile_definitions(${TARGET} PRIVATE ${PNG_DEFINITIONS})
-  target_include_directories(${TARGET} PRIVATE ${PNG_INCLUDE_DIRS})
-  target_link_libraries(${TARGET} PRIVATE ${PNG_LIBRARIES})
-  target_compile_definitions(${TARGET} PRIVATE ${JPEG_DEFINITIONS})
-  target_include_directories(${TARGET} PRIVATE ${JPEG_INCLUDE_DIRS})
-  target_link_libraries(${TARGET} PRIVATE ${JPEG_LIBRARIES})
+  target_compile_definitions(${TARGET} PRIVATE ${PNG_DEFINITIONS} ${JPEG_DEFINITIONS})
+  target_include_directories(${TARGET} PRIVATE ${PNG_INCLUDE_DIRS} ${JPEG_INCLUDE_DIRS})
+  target_link_libraries(${TARGET} PRIVATE ${PNG_LIBRARIES} ${JPEG_LIBRARIES})
 endfunction()
 
 include(../../HalideGenerator.cmake)
@@ -61,13 +58,7 @@ foreach(GEN_SRC ${GENS})
     string(REPLACE "_generator.cpp" "" GEN_NAME "${GEN_SRC}")
     # GEN_EXECUTABLE := *.generator
     string(REPLACE "_generator.cpp" "" GEN_EXECUTABLE "${GEN_SRC}.generator")
-    add_executable("${GEN_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/GenGen.cpp" "${GEN_SRC}")
-    if (MSVC)
-      target_compile_options("${GEN_EXECUTABLE}" PRIVATE "/GR-")
-    else()
-      target_compile_options("${GEN_EXECUTABLE}" PRIVATE "-fno-rtti")
-    endif()
-    target_link_libraries("${GEN_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../../lib/libHalide.a" z)
+    halide_add_generator("${GEN_EXECUTABLE}" SRCS ${GEN_SRC} LIBHALIDE ${HALIDE_SRC_DIR}/lib/libHalide.a)
 
     halide_add_aot_library("${GEN_NAME}"
                            GENERATOR_TARGET ${GEN_EXECUTABLE}
