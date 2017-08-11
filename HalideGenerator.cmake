@@ -26,6 +26,7 @@ function(_halide_generator_add_exec_generator_target EXEC_TARGET)
 
   # This "target" will always be built.
   add_custom_target(${EXEC_TARGET} DEPENDS ${args_OUTPUTS})
+  set_target_properties(${EXEC_TARGET} PROPERTIES FOLDER "generator")
   add_custom_command(
     OUTPUT ${args_OUTPUTS}
     DEPENDS ${args_GENERATOR_TARGET}
@@ -33,18 +34,20 @@ function(_halide_generator_add_exec_generator_target EXEC_TARGET)
     WORKING_DIRECTORY ${args_GENFILES_DIR}
     COMMENT "Executing Generator ${args_GENERATOR_TARGET} with args ${args_GENERATOR_ARGS}..."
   )
-  set_target_properties(${EXEC_TARGET} PROPERTIES FOLDER "generator")
+  foreach(OUT ${args_OUTPUTS})
+    set_source_files_properties(${OUT} PROPERTIES GENERATED TRUE)
+  endforeach()
 endfunction()
 
 # This function adds custom build steps to invoke a Halide generator executable
 # and produce a static library containing the generated code.
 #
 # The generator executable must be produced separately, e.g. using a call to the
-# function halide_add_generator() or halide_project(...) or add_executable(...) 
+# function halide_generator() or halide_project(...) or add_executable(...) 
 # and passed to this function in the GENERATOR_TARGET parameter.
 #
 # Usage:
-#   halide_add_aot_library(<name>
+#   halide_library_from_generator(<name>
 #                          GENERATOR_TARGET <target>
 #                          GENERATOR_NAME <string>
 #                          GENERATED_FUNCTION <string>
@@ -62,7 +65,7 @@ endfunction()
 #   GENERATOR_OUTPUTS are the values to pass to -e; if omitted, defaults to "h static_library"
 #   GENERATOR_ARGS are optional extra arguments passed to the generator executable during
 #     build.
-function(halide_add_aot_library AOT_LIBRARY_TARGET)
+function(halide_library_from_generator BASENAME)
   # Parse arguments
   set(options )
   set(oneValueArgs GENERATOR_TARGET GENERATOR_NAME GENERATED_FUNCTION)
@@ -74,12 +77,12 @@ function(halide_add_aot_library AOT_LIBRARY_TARGET)
   endif()
 
   # Create a directory to contain generator specific intermediate files
-  _halide_generator_genfiles_dir(${AOT_LIBRARY_TARGET} GENFILES_DIR)
+  _halide_generator_genfiles_dir(${BASENAME} GENFILES_DIR)
 
   # Determine the name of the output files
-  set(FILTER_LIB "${AOT_LIBRARY_TARGET}${CMAKE_STATIC_LIBRARY_SUFFIX}")
-  set(FILTER_HDR "${AOT_LIBRARY_TARGET}.h")
-  set(FILTER_CPP "${AOT_LIBRARY_TARGET}.cpp")
+  set(FILTER_LIB "${BASENAME}${CMAKE_STATIC_LIBRARY_SUFFIX}")
+  set(FILTER_HDR "${BASENAME}.h")
+  set(FILTER_CPP "${BASENAME}.cpp")
 
   set(GENERATOR_EXEC_ARGS "-o" "${GENFILES_DIR}")
   if (NOT ${args_GENERATED_FUNCTION} STREQUAL "")
@@ -111,70 +114,50 @@ function(halide_add_aot_library AOT_LIBRARY_TARGET)
   endif()
   if (${_h_index} GREATER -1)
     list(APPEND OUTPUTS "${GENFILES_DIR}/${FILTER_HDR}")
-    set_source_files_properties("${GENFILES_DIR}/${FILTER_HDR}" PROPERTIES GENERATED TRUE)
   endif()
   if (${_cpp_index} GREATER -1)
     list(APPEND OUTPUTS "${GENFILES_DIR}/${FILTER_CPP}")
-    set_source_files_properties("${GENFILES_DIR}/${FILTER_HDR}" PROPERTIES GENERATED TRUE)
   endif()
 
   _halide_generator_add_exec_generator_target(
-    "${AOT_LIBRARY_TARGET}.exec_generator"
+    "${BASENAME}_lib_gen"
     GENERATOR_TARGET "${args_GENERATOR_TARGET}_binary"
     GENERATOR_ARGS   "${GENERATOR_EXEC_ARGS}"
     GENFILES_DIR     ${GENFILES_DIR}
     OUTPUTS          ${OUTPUTS}
   )
 
+  # -------------------
+
+  add_library("${BASENAME}" INTERFACE)
+  add_dependencies("${BASENAME}" "${BASENAME}_lib_gen")
+  if (${_h_index} GREATER -1)
+    set_target_properties("${BASENAME}" PROPERTIES INTERFACE_INCLUDE_DIRECTORIES ${GENFILES_DIR})
+  endif()
+  if (${_lib_index} GREATER -1)
+    set_target_properties("${BASENAME}" PROPERTIES INTERFACE_LINK_LIBRARIES "${GENFILES_DIR}/${FILTER_LIB}")
+  endif()
+
+
   # ------ Code to build the RunGen target
 
-  set(RUNGEN "${AOT_LIBRARY_TARGET}.rungen")
+  set(RUNGEN "${BASENAME}.rungen")
   add_executable("${RUNGEN}" "${CMAKE_SOURCE_DIR}/tools/RunGenStubs.cpp")
-  target_compile_definitions("${RUNGEN}" PRIVATE "-DHL_RUNGEN_FILTER_HEADER=\"${AOT_LIBRARY_TARGET}.h\"")
-  target_link_libraries("${RUNGEN}" PRIVATE HalideToolsRunGen)
-  halide_add_aot_library_dependency("${RUNGEN}" "${AOT_LIBRARY_TARGET}")
-  target_link_libraries("${RUNGEN}" PRIVATE ${args_FILTER_DEPS})
+  target_compile_definitions("${RUNGEN}" PRIVATE "-DHL_RUNGEN_FILTER_HEADER=\"${BASENAME}.h\"")
+  target_link_libraries("${RUNGEN}" PRIVATE HalideToolsRunGen "${BASENAME}" ${args_FILTER_DEPS})
 
   # Not all Generators will build properly with RunGen (e.g., missing
   # external dependencies), so exclude them from the "ALL" targets
   set_target_properties("${RUNGEN}" PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
-  add_custom_target("${AOT_LIBRARY_TARGET}.run" 
+  add_custom_target("${BASENAME}.run" 
                     COMMAND "${RUNGEN}" "$(RUNARGS)"
                     DEPENDS "${RUNGEN}")
-  set_target_properties("${AOT_LIBRARY_TARGET}.run" PROPERTIES EXCLUDE_FROM_ALL TRUE)
+  set_target_properties("${BASENAME}.run" PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
-endfunction(halide_add_aot_library)
+endfunction(halide_library_from_generator)
 
-# Usage:
-#   halide_add_aot_library_dependency(TARGET AOT_LIBRARY_TARGET)
-function(halide_add_aot_library_dependency TARGET AOT_LIBRARY_TARGET)
-    _halide_generator_genfiles_dir(${AOT_LIBRARY_TARGET} GENFILES_DIR)
-  
-    add_dependencies("${TARGET}" "${AOT_LIBRARY_TARGET}.exec_generator")
-
-    set(FILTER_LIB "${AOT_LIBRARY_TARGET}${CMAKE_STATIC_LIBRARY_SUFFIX}")
-    target_link_libraries("${TARGET}" PRIVATE "${GENFILES_DIR}/${FILTER_LIB}")
-    target_include_directories("${TARGET}" PRIVATE "${GENFILES_DIR}")
-
-    if (WIN32)
-      if (MSVC)
-        # /FORCE:multiple allows clobbering the halide runtime symbols in the lib
-        # linker warnings disabled: 
-        # 4006: "already defined, second definition ignored"
-        # 4088: "/FORCE used, image may not work"
-        # (Note that MSVC apparently considers 4088 too important to allow us to ignore it;
-        # I'm nevertheless leaving this here to document that we don't care about it.)
-        set_target_properties("${TARGET}" PROPERTIES LINK_FLAGS "/STACK:8388608,1048576 /FORCE:multiple /ignore:4006 /ignore:4088")
-      else()
-        set_target_properties("${TARGET}" PROPERTIES LINK_FLAGS "-Wl,--allow-multiple-definition")
-      endif()
-    else()
-      target_link_libraries("${TARGET}" PRIVATE dl pthread)
-    endif()
-endfunction(halide_add_aot_library_dependency)
-
-function(halide_add_generator FULLNAME)
+function(halide_generator FULLNAME)
   set(oneValueArgs LIBHALIDE)
   set(multiValueArgs SRCS DEPS)
   cmake_parse_arguments(args "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
@@ -184,7 +167,7 @@ function(halide_add_generator FULLNAME)
   endif()
 
   if(NOT ${FULLNAME} MATCHES "^.*\\.generator$")
-    message(FATAL_ERROR "halide_add_generator rules must end in .generator (${FULLNAME})")
+    message(FATAL_ERROR "halide_generator rules must end in .generator (${FULLNAME})")
   endif()
 
   # BASENAME = strip_suffix(${FULLNAME}, ".generator")
@@ -232,18 +215,17 @@ function(halide_add_generator FULLNAME)
     GENFILES_DIR     "${GENFILES_DIR}"
     OUTPUTS          "${STUB_HDR}"
   )
-  set_source_files_properties("${STUB_HDR}" PROPERTIES GENERATED TRUE)
 
   # Make a header-only library that exports the include path
   add_library("${FULLNAME}" INTERFACE)
   add_dependencies("${FULLNAME}" "${FULLNAME}_stub_gen")
   set_target_properties("${FULLNAME}" PROPERTIES INTERFACE_INCLUDE_DIRECTORIES ${GENFILES_DIR})
 
-endfunction(halide_add_generator)
+endfunction(halide_generator)
 
 function(halide_add_aot_cpp_dependency TARGET AOT_LIBRARY_TARGET)
   _halide_generator_genfiles_dir(${AOT_LIBRARY_TARGET} GENFILES_DIR)
-  add_dependencies("${TARGET}" "${AOT_LIBRARY_TARGET}.exec_generator")
+  # add_dependencies("${TARGET}" "${AOT_LIBRARY_TARGET}.exec_generator")
 
   add_library(${AOT_LIBRARY_TARGET}.cpplib STATIC "${GENFILES_DIR}/${AOT_LIBRARY_TARGET}.cpp")
   target_link_libraries("${TARGET}" PRIVATE ${AOT_LIBRARY_TARGET}.cpplib)

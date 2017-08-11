@@ -68,7 +68,7 @@ endif()
 function(add_test_generator NAME)
   set(multiValueArgs DEPS)
   cmake_parse_arguments(args "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
-  halide_add_generator("${NAME}.generator"
+  halide_generator("${NAME}.generator"
                        SRCS "${CMAKE_CURRENT_SOURCE_DIR}/generator/${NAME}_generator.cpp"
                        DEPS ${args_DEPS})
 endfunction(add_test_generator)
@@ -124,13 +124,13 @@ function(halide_define_aot_test NAME)
     endif()
 
     set(AOT_LIBRARY_TARGET "${NAME}")
-    halide_add_aot_library("${AOT_LIBRARY_TARGET}"
+    halide_library_from_generator("${AOT_LIBRARY_TARGET}"
                            GENERATOR_TARGET "${NAME}.generator"
                            GENERATOR_NAME "${args_GENERATOR_NAME}"
                            GENERATED_FUNCTION "${args_GENERATED_FUNCTION}"
                            GENERATOR_ARGS "target=${args_GENERATOR_HALIDE_TARGET}" "${args_GENERATOR_ARGS}"
                            FILTER_DEPS "${args_FILTER_DEPS}")
-    halide_add_aot_library_dependency("${TARGET}" "${AOT_LIBRARY_TARGET}")
+    target_link_libraries("${TARGET}" PUBLIC "${AOT_LIBRARY_TARGET}")
   endif()
 
   target_link_libraries("${TARGET}" PRIVATE ${args_FILTER_DEPS})
@@ -155,12 +155,12 @@ function(halide_add_aot_test_dependency NAME)
       set(args_GENERATOR_HALIDE_TARGET "host")
     endif()
 
-  halide_add_aot_library("${args_AOT_LIBRARY_TARGET}"
+  halide_library_from_generator("${args_AOT_LIBRARY_TARGET}"
                          GENERATOR_TARGET "${args_GENERATOR_TARGET}.generator"
                          GENERATOR_NAME "${args_GENERATOR_NAME}"
                          GENERATED_FUNCTION "${args_GENERATED_FUNCTION}"
                          GENERATOR_ARGS "target=${args_GENERATOR_HALIDE_TARGET}" "${args_GENERATOR_ARGS}")
-  halide_add_aot_library_dependency("${TARGET}" "${args_AOT_LIBRARY_TARGET}")
+  target_link_libraries("${TARGET}" PUBLIC "${args_AOT_LIBRARY_TARGET}")
 endfunction(halide_add_aot_test_dependency)
 
 if (WITH_TEST_GENERATORS)
@@ -318,7 +318,7 @@ if (WITH_TEST_GENERATORS)
   add_library(cxx_mangling_define_extern_externs 
               "${CMAKE_CURRENT_SOURCE_DIR}/generator/cxx_mangling_define_extern_externs.cpp")
   target_link_libraries(cxx_mangling_define_extern_externs PRIVATE cxx_mangling_externs)
-  halide_add_aot_library_dependency(cxx_mangling_define_extern_externs cxx_mangling)
+  target_link_libraries(cxx_mangling_define_extern_externs PUBLIC cxx_mangling)
 
   halide_define_aot_test(cxx_mangling_define_extern
                          GENERATOR_HALIDE_TARGET host-c_plus_plus_name_mangling-user_context
@@ -326,7 +326,7 @@ if (WITH_TEST_GENERATORS)
                          FILTER_DEPS cxx_mangling_externs cxx_mangling_define_extern_externs)
   # The cxx_mangling library was already defined implicitly, above,
   # so just add a dependency on it
-  halide_add_aot_library_dependency(generator_aot_cxx_mangling_define_extern cxx_mangling)
+  target_link_libraries(generator_aot_cxx_mangling_define_extern PUBLIC cxx_mangling)
 
   halide_define_aot_test(nested_externs OMIT_DEFAULT_GENERATOR)
   halide_add_aot_test_dependency(nested_externs

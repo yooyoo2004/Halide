@@ -1,11 +1,11 @@
 # Generator
-halide_add_generator(bilateral_grid.generator
+halide_generator(bilateral_grid.generator
                      SRCS bilateral_grid_generator.cpp)
-halide_add_aot_library(bilateral_grid
+halide_library_from_generator(bilateral_grid
                        GENERATOR_TARGET bilateral_grid.generator
                        GENERATOR_ARGS target=host)
 
 # Final executable
 add_executable(filter filter.cpp)
-halide_add_aot_library_dependency(filter bilateral_grid)
+target_link_libraries(filter PUBLIC bilateral_grid)
 use_image_io(filter)

@@ -58,14 +58,14 @@ foreach(GEN_SRC ${GENS})
     string(REPLACE "_generator.cpp" "" GEN_NAME "${GEN_SRC}")
     # GEN_EXECUTABLE := *.generator
     string(REPLACE "_generator.cpp" "" GEN_EXECUTABLE "${GEN_SRC}.generator")
-    halide_add_generator("${GEN_EXECUTABLE}" SRCS ${GEN_SRC} LIBHALIDE ${HALIDE_SRC_DIR}/lib/libHalide.a)
+    halide_generator("${GEN_EXECUTABLE}" SRCS ${GEN_SRC} LIBHALIDE ${HALIDE_SRC_DIR}/lib/libHalide.a)
 
-    halide_add_aot_library("${GEN_NAME}"
+    halide_library_from_generator("${GEN_NAME}"
                            GENERATOR_TARGET ${GEN_EXECUTABLE}
                            GENERATOR_NAME ${GEN_NAME}
                            GENERATED_FUNCTION ${GEN_NAME}
                            GENERATOR_ARGS "target=host")
-    halide_add_aot_library_dependency(wavelet "${GEN_NAME}")
+    target_link_libraries(wavelet PUBLIC "${GEN_NAME}")
 
 endforeach()
 
