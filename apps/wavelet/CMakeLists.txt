@@ -27,9 +27,11 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_SOURCE_DIR "${HALIDE_SRC_DIR}")
 
 SET(HALIDE_SRC_DIR "${CMAKE_CURRENT_LIST_DIR}/../../" CACHE PATH "Root of Halide source Tree")
-include_directories ("${HALIDE_SRC_DIR}/apps/support")
+include_directories("${HALIDE_SRC_DIR}/apps/support")
 include_directories("${HALIDE_SRC_DIR}/include")
 include_directories("${HALIDE_SRC_DIR}/tools")
+
+SET(HALIDE_LIB_PATH ${HALIDE_SRC_DIR}/lib/libHalide.a)
 
 add_executable(wavelet "${CMAKE_CURRENT_SOURCE_DIR}/wavelet.cpp")
 if (MSVC)
@@ -50,17 +52,11 @@ else()
   target_compile_options(HalideToolsRunGen PUBLIC "-fno-rtti")
 endif()
 
-# GENS := *_generator.cpp
 file(GLOB GENS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/*_generator.cpp")
 
 foreach(GEN_SRC ${GENS})
-    # GEN_NAME := *.generator
     string(REPLACE "_generator.cpp" "" GEN_NAME "${GEN_SRC}")
-
-    halide_library("${GEN_NAME}"
-                    SRCS           ${GEN_SRC} 
-                    LIBHALIDE      ${HALIDE_SRC_DIR}/lib/libHalide.a)
+    halide_library("${GEN_NAME}" SRCS ${GEN_SRC})
     target_link_libraries(wavelet PUBLIC "${GEN_NAME}")
-
 endforeach()
 
