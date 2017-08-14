@@ -174,6 +174,14 @@ function(use_image_io TARGET)
   target_link_libraries(${TARGET} PRIVATE ${JPEG_LIBRARIES})
 endfunction()
 
+
+function(run_after_build TARGET)
+  add_custom_target("${TARGET}.run_test" 
+                    COMMAND "${TARGET}"
+                    DEPENDS "${TARGET}")
+  set_target_properties("${TARGET}.run_test" PROPERTIES EXCLUDE_FROM_ALL FALSE)
+endfunction(run_after_build)
+
 # -----------------------------------------------------------------------------
 # Option to enable/disable assertions
 # -----------------------------------------------------------------------------

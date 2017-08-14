@@ -56,15 +56,10 @@ file(GLOB GENS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DI
 foreach(GEN_SRC ${GENS})
     # GEN_NAME := *.generator
     string(REPLACE "_generator.cpp" "" GEN_NAME "${GEN_SRC}")
-    # GEN_EXECUTABLE := *.generator
-    string(REPLACE "_generator.cpp" "" GEN_EXECUTABLE "${GEN_SRC}.generator")
-    halide_generator("${GEN_EXECUTABLE}" SRCS ${GEN_SRC} LIBHALIDE ${HALIDE_SRC_DIR}/lib/libHalide.a)
 
-    halide_library_from_generator("${GEN_NAME}"
-                           GENERATOR ${GEN_EXECUTABLE}
-                           GENERATOR_NAME ${GEN_NAME}
-                           GENERATED_FUNCTION ${GEN_NAME}
-                           GENERATOR_ARGS "target=host")
+    halide_library("${GEN_NAME}"
+                    SRCS           ${GEN_SRC} 
+                    LIBHALIDE      ${HALIDE_SRC_DIR}/lib/libHalide.a)
     target_link_libraries(wavelet PUBLIC "${GEN_NAME}")
 
 endforeach()
