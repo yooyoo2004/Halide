@@ -105,10 +105,6 @@ function(halide_define_aot_test NAME)
                              "${CMAKE_SOURCE_DIR}/tools" 
                              "${CMAKE_SOURCE_DIR}/src/runtime")
   set_target_properties("${TARGET}" PROPERTIES FOLDER "generator")
-  if (MSVC)
-    # 4088: "/FORCE used, image may not work"
-    set_target_properties("${TARGET}" PROPERTIES LINK_FLAGS "/ignore:4088")
-  endif()
 
   if (NOT ${args_OMIT_DEFAULT_GENERATOR})
     halide_library_from_generator("${NAME}"

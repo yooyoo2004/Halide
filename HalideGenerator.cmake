@@ -189,12 +189,10 @@ function(halide_generator NAME)
   endforeach()
 
   add_executable("${NAME}_binary" "${HALIDE_SRC_DIR}/tools/GenGen.cpp" ${ALLDEPS})
-  target_link_libraries("${NAME}_binary" PRIVATE ${LOCAL_HALIDE_LIB_PATH} z ${CMAKE_DL_LIBS} ${CMAKE_THREAD_LIBS_INIT})
+  target_link_libraries("${NAME}_binary" PRIVATE ${LOCAL_HALIDE_LIB_PATH} ${CMAKE_DL_LIBS} ${CMAKE_THREAD_LIBS_INIT})
   target_include_directories("${NAME}_binary" PRIVATE "${HALIDE_SRC_DIR}/include" "${HALIDE_SRC_DIR}/tools")
   set_target_properties("${NAME}_binary" PROPERTIES FOLDER "generator")
   if (MSVC)
-    set_target_properties(${NAME}_binary PROPERTIES LINK_FLAGS "/ignore:4006 /ignore:4088")
-    target_compile_definitions("${NAME}_binary" PRIVATE _CRT_SECURE_NO_WARNINGS)
     target_link_libraries("${NAME}_binary" PRIVATE Kernel32)
   endif()
 
