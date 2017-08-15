@@ -162,6 +162,8 @@ function(halide_generator NAME)
   # Use Object Libraries to so that Generator registration isn't dead-stripped away
   set(OBJLIB "${NAME}_library")
   add_library("${OBJLIB}" OBJECT ${args_SRCS})
+  # if args_SRCS is empty (eg for runtime) CMake may get confused; help it out
+  set_target_properties("${OBJLIB}" PROPERTIES LINKER_LANGUAGE C++)
   add_dependencies("${OBJLIB}" ${LOCAL_HALIDE_LIB_PATH})  # ensure Halide.h is built
   target_include_directories("${OBJLIB}" PRIVATE "${CMAKE_BINARY_DIR}/include")
   target_include_directories("${OBJLIB}" PRIVATE "${args_INCLUDES}")
