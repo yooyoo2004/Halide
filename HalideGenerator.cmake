@@ -8,6 +8,16 @@ define_property(TARGET PROPERTY HALIDE_GENERATOR_NAME
                 BRIEF_DOCS "Internal use by Halide build rules"
                 FULL_DOCS "Internal use by Halide build rules")
 
+function(_set_cxx_options TARGET)
+  set_target_properties("${TARGET}" PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
+  if (MSVC)
+    target_compile_definitions("${TARGET}" PUBLIC "-D_CRT_SECURE_NO_WARNINGS" "-D_SCL_SECURE_NO_WARNINGS")
+    target_compile_options("${TARGET}" PRIVATE "/GR-")
+  else()
+    target_compile_options("${TARGET}" PRIVATE "-fno-rtti")
+  endif()
+endfunction()
+
 function(_halide_generator_genfiles_dir NAME OUTVAR)
   set(GENFILES_DIR "${CMAKE_BINARY_DIR}/genfiles/${NAME}")
   file(MAKE_DIRECTORY "${GENFILES_DIR}")
@@ -167,12 +177,7 @@ function(halide_generator NAME)
   add_dependencies("${OBJLIB}" ${LOCAL_HALIDE_LIB_PATH})  # ensure Halide.h is built
   target_include_directories("${OBJLIB}" PRIVATE "${CMAKE_BINARY_DIR}/include")
   target_include_directories("${OBJLIB}" PRIVATE "${args_INCLUDES}")
-  set_target_properties("${OBJLIB}" PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
-  if (MSVC)
-    target_compile_options("${OBJLIB}" PRIVATE "/GR-")
-  else()
-    target_compile_options("${OBJLIB}" PRIVATE "-fno-rtti")
-  endif()
+  _set_cxx_options("${OBJLIB}")
 
   # TODO: this needs attention so that it can work with "ordinary" deps (e.g. static libs)
   # as well as generator deps (which are object-libraries which need special casing)
