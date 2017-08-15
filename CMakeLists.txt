@@ -166,12 +166,9 @@ if (NOT JPEG_FOUND)
 endif()
 
 function(use_image_io TARGET)
-  target_compile_definitions(${TARGET} PRIVATE ${PNG_DEFINITIONS})
-  target_include_directories(${TARGET} PRIVATE ${PNG_INCLUDE_DIRS})
-  target_link_libraries(${TARGET} PRIVATE ${PNG_LIBRARIES})
-  target_compile_definitions(${TARGET} PRIVATE ${JPEG_DEFINITIONS})
-  target_include_directories(${TARGET} PRIVATE ${JPEG_INCLUDE_DIRS})
-  target_link_libraries(${TARGET} PRIVATE ${JPEG_LIBRARIES})
+  target_compile_definitions(${TARGET} PRIVATE ${PNG_DEFINITIONS} ${JPEG_DEFINITIONS})
+  target_include_directories(${TARGET} PRIVATE ${PNG_INCLUDE_DIRS} ${JPEG_INCLUDE_DIRS})
+  target_link_libraries(${TARGET} PRIVATE ${PNG_LIBRARIES} ${JPEG_LIBRARIES})
 endfunction()
 
 
