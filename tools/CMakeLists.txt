@@ -1,8 +1,0 @@
-add_library(HalideToolsRunGen "${CMAKE_SOURCE_DIR}/tools/RunGen.cpp")
-target_include_directories(HalideToolsRunGen PRIVATE "${CMAKE_SOURCE_DIR}/src/runtime")
-target_compile_definitions(HalideToolsRunGen PUBLIC "-D_CRT_SECURE_NO_WARNINGS" "-D_SCL_SECURE_NO_WARNINGS")
-halide_use_image_io(HalideToolsRunGen)
-if (MSVC)
-else()
-  target_compile_options(HalideToolsRunGen PUBLIC "-fno-rtti")
-endif()

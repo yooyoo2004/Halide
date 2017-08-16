@@ -149,7 +149,6 @@ endif()
 # Include the rules for Generator, ImageIO, etc
 include(HalideGenerator.cmake)
 
-
 function(run_after_build TARGET)
   add_custom_target("${TARGET}.run_test" 
                     COMMAND "${TARGET}"
@@ -179,7 +178,6 @@ foreach (build_config Debug Release RelWithDebInfo MinSizeRel)
 endforeach()
 
 add_subdirectory(src)
-add_subdirectory(tools)
 option(WITH_TESTS "Build tests" ON)
 if (WITH_TESTS)
   message(STATUS "Building tests enabled")

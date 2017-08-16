@@ -36,14 +36,6 @@ endif()
 
 halide_use_image_io(wavelet)
 
-add_library(HalideToolsRunGen "${HALIDE_SRC_DIR}/tools/RunGen.cpp")
-halide_use_image_io(HalideToolsRunGen)
-if (MSVC)
-  target_compile_options("${GEN_EXECUTABLE}" PRIVATE "/GR-")
-else()
-  target_compile_options(HalideToolsRunGen PUBLIC "-fno-rtti")
-endif()
-
 file(GLOB GENS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/*_generator.cpp")
 
 foreach(GEN_SRC ${GENS})

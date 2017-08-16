@@ -186,6 +186,9 @@ function(halide_generator NAME)
 
   # Use Object Libraries to so that Generator registration isn't dead-stripped away
   set(OBJLIB "${NAME}_library")
+  # TODO: Some versions of CMake will emit a harmless warning here:
+  # "You have called ADD_LIBRARY for library halide_library_runtime.generator_library without any source files."
+  # It is harmless but would be nice to remove.
   add_library("${OBJLIB}" OBJECT ${args_SRCS})
   # if args_SRCS is empty (eg for runtime) CMake may get confused; help it out
   set_target_properties("${OBJLIB}" PROPERTIES LINKER_LANGUAGE C++)
@@ -356,11 +359,17 @@ function(halide_library_from_generator BASENAME)
 
 
   # ------ Code to build the RunGen target
+  if(NOT TARGET _halide_library_from_generator_rungen)
+    add_library(_halide_library_from_generator_rungen "${HALIDE_SRC_DIR}/tools/RunGen.cpp")
+    target_include_directories(_halide_library_from_generator_rungen PRIVATE "${CMAKE_SOURCE_DIR}/src/runtime")
+    halide_use_image_io(_halide_library_from_generator_rungen)
+    _set_cxx_options(_halide_library_from_generator_rungen)
+  endif()
 
   set(RUNGEN "${BASENAME}.rungen")
   add_executable("${RUNGEN}" "${HALIDE_SRC_DIR}/tools/RunGenStubs.cpp")
   target_compile_definitions("${RUNGEN}" PRIVATE "-DHL_RUNGEN_FILTER_HEADER=\"${BASENAME}.h\"")
-  target_link_libraries("${RUNGEN}" PRIVATE HalideToolsRunGen "${BASENAME}" ${args_FILTER_DEPS})
+  target_link_libraries("${RUNGEN}" PRIVATE _halide_library_from_generator_rungen "${BASENAME}" ${args_FILTER_DEPS})
 
   # Not all Generators will build properly with RunGen (e.g., missing
   # external dependencies), so exclude them from the "ALL" targets
