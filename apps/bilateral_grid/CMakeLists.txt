@@ -8,4 +8,4 @@ halide_library_from_generator(bilateral_grid
 # Final executable
 add_executable(filter filter.cpp)
 target_link_libraries(filter PUBLIC bilateral_grid)
-use_image_io(filter)
+halide_use_image_io(filter)

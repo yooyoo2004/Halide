@@ -8,4 +8,4 @@ halide_library_from_generator(local_laplacian
 # Final executable
 add_executable(ll_process process.cpp)
 target_link_libraries(ll_process PUBLIC local_laplacian)
-use_image_io(ll_process)
+halide_use_image_io(ll_process)

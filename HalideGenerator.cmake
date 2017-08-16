@@ -1,5 +1,20 @@
 include(CMakeParseArguments)
 
+function(halide_use_image_io TARGET)
+  foreach(PKG PNG JPEG)
+    # It's OK to call find_package() for the same package multiple times.
+    find_package(${PKG} QUIET)
+    if(${PKG}_FOUND)
+      target_compile_definitions(${TARGET} PRIVATE ${${PKG}_DEFINITIONS})
+      target_include_directories(${TARGET} PRIVATE ${${PKG}_INCLUDE_DIRS})
+      target_link_libraries(${TARGET} PRIVATE ${${PKG}_LIBRARIES})
+    else()
+      message(STATUS "${PKG} not found for ${TARGET}; compiling with -DHALIDE_NO_${PKG}")
+      target_compile_definitions(${TARGET} PRIVATE -DHALIDE_NO_${PKG})
+    endif()
+  endforeach()
+endfunction()
+
 if("${HALIDE_SRC_DIR}" STREQUAL "")
   set(HALIDE_SRC_DIR "${CMAKE_SOURCE_DIR}")
 endif()
@@ -189,7 +204,8 @@ function(halide_generator NAME)
   endforeach()
 
   add_executable("${NAME}_binary" "${HALIDE_SRC_DIR}/tools/GenGen.cpp" ${ALLDEPS})
-  target_link_libraries("${NAME}_binary" PRIVATE ${LOCAL_HALIDE_LIB_PATH} ${CMAKE_DL_LIBS} ${CMAKE_THREAD_LIBS_INIT})
+  # TODO remove z
+  target_link_libraries("${NAME}_binary" PRIVATE ${LOCAL_HALIDE_LIB_PATH} z ${CMAKE_DL_LIBS} ${CMAKE_THREAD_LIBS_INIT})
   target_include_directories("${NAME}_binary" PRIVATE "${HALIDE_SRC_DIR}/include" "${HALIDE_SRC_DIR}/tools")
   set_target_properties("${NAME}_binary" PROPERTIES FOLDER "generator")
   if (MSVC)

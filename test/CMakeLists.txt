@@ -43,7 +43,7 @@ endfunction(tests)
 
 if (WITH_TEST_CORRECTNESS)
   tests(correctness)
-  use_image_io(correctness_image_io)
+  halide_use_image_io(correctness_image_io)
   test_plain_c_includes()
 endif()
 if (WITH_TEST_ERROR)
@@ -89,8 +89,6 @@ function(halide_define_jit_test NAME)
   # TODO Linkage broken
   # run_after_build("generator_jit_${NAME}")
 endfunction(halide_define_jit_test)
-
-include(../HalideGenerator.cmake)
 
 function(halide_define_aot_test NAME)
   set(options OMIT_DEFAULT_GENERATOR)
