@@ -154,36 +154,18 @@ endfunction(_halide_library_runtime_target_name)
 
 function(_halide_generator_add_exec_generator_target EXEC_TARGET)
   set(options )
-  set(oneValueArgs GENERATOR_BINARY GENFILES_DIR)
+  set(oneValueArgs GENERATOR_BINARY)
   set(multiValueArgs OUTPUTS GENERATOR_ARGS)
   cmake_parse_arguments(args "" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
-  set(BIN_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
-  if("${BIN_DIR}" STREQUAL "")
-    set(BIN_DIR "${CMAKE_BINARY_DIR}")
-  endif()
-
-  if(MSVC)
-    # In MSVC, the generator executable will be placed in a configuration specific
-    # directory specified by ${CMAKE_CFG_INTDIR}.
-    set(EXEC_PATH "${BIN_DIR}/${CMAKE_CFG_INTDIR}/${args_GENERATOR_BINARY}${CMAKE_EXECUTABLE_SUFFIX}")
-  elseif(XCODE)
-    # In Xcode, the generator executable will be placed in a configuration specific
-    # directory, so the Xcode variable $(CONFIGURATION) is passed in the custom build script.
-    set(EXEC_PATH "${BIN_DIR}/$(CONFIGURATION)/${args_GENERATOR_BINARY}${CMAKE_EXECUTABLE_SUFFIX}")
-  else()
-    set(EXEC_PATH "${BIN_DIR}/${args_GENERATOR_BINARY}${CMAKE_EXECUTABLE_SUFFIX}")
-  endif()
-
-  # This "target" will always be built.
   add_custom_target(${EXEC_TARGET} DEPENDS ${args_OUTPUTS})
   set_target_properties(${EXEC_TARGET} PROPERTIES FOLDER "generator")
+
+  # As of CMake 3.x, add_custom_command() recognizes executable target names in its COMMAND.
   add_custom_command(
     OUTPUT ${args_OUTPUTS}
     DEPENDS ${args_GENERATOR_BINARY}
-    COMMAND ${EXEC_PATH} ${args_GENERATOR_ARGS}
-    WORKING_DIRECTORY ${args_GENFILES_DIR}
-    # COMMENT "Executing Generator ${args_GENERATOR_BINARY} with args ${args_GENERATOR_ARGS}..."
+    COMMAND ${args_GENERATOR_BINARY} ${args_GENERATOR_ARGS}
   )
   foreach(OUT ${args_OUTPUTS})
     set_source_files_properties(${OUT} PROPERTIES GENERATED TRUE)
@@ -207,39 +189,32 @@ function(halide_generator NAME)
     set(args_GENERATOR_NAME "${BASENAME}")
   endif()
 
-  # Use Object Libraries to so that Generator registration isn't dead-stripped away
-  set(OBJLIB "${NAME}_library")
-  # TODO: Some versions of CMake will emit a harmless warning here:
-  # "You have called ADD_LIBRARY for library halide_library_runtime.generator_library without any source files."
-  # It is harmless but would be nice to remove.
-  add_library("${OBJLIB}" OBJECT ${args_SRCS})
-  # Ensure that Halide.h is built prior to any Generator
-  add_dependencies("${OBJLIB}" ${HALIDE_COMPILER_LIB})
-  # if args_SRCS is empty (eg for runtime) CMake may get confused; help it out
-  set_target_properties("${OBJLIB}" PROPERTIES LINKER_LANGUAGE C++)
-  target_include_directories("${OBJLIB}" PRIVATE 
-                             "${args_INCLUDES}"
-                             "${HALIDE_INCLUDE_DIR}" 
-                             "${HALIDE_TOOLS_DIR}")
-  _set_cxx_options("${OBJLIB}")
-
-  # TODO: this needs attention so that it can work with "ordinary" deps (e.g. static libs)
-  # as well as generator deps (which are object-libraries which need special casing)
-  set(ALLDEPS $<TARGET_OBJECTS:${OBJLIB}>)
-  foreach(DEP ${args_DEPS})
-    list(APPEND ALLDEPS $<TARGET_OBJECTS:${DEP}_library>)
-    add_dependencies("${OBJLIB}" "${DEP}")
-    target_include_directories("${OBJLIB}" PRIVATE $<TARGET_PROPERTY:${DEP},INTERFACE_INCLUDE_DIRECTORIES>)
-  endforeach()
-
-  if(NOT TARGET _halide_gengen)
-    add_library(_halide_gengen "${HALIDE_TOOLS_DIR}/GenGen.cpp")
-    target_link_libraries(_halide_gengen PRIVATE ${HALIDE_COMPILER_LIB})
-    _set_cxx_options(_halide_gengen)
+  list(LENGTH args_SRCS SRCSLEN)
+  # Don't create empty object-library: that can cause quiet failures in MSVC builds.
+  if("${SRCSLEN}" GREATER 0)
+    # Use Object Libraries to so that Generator registration isn't dead-stripped away
+    set(OBJLIB "${NAME}_library")
+    add_library("${OBJLIB}" OBJECT ${args_SRCS})
+    # Ensure that Halide.h is built prior to any Generator
+    add_dependencies("${OBJLIB}" ${HALIDE_COMPILER_LIB})
+    target_include_directories("${OBJLIB}" PRIVATE 
+                               "${args_INCLUDES}"
+                               "${HALIDE_INCLUDE_DIR}" 
+                               "${HALIDE_TOOLS_DIR}")
+    _set_cxx_options("${OBJLIB}")
+    # TODO: this needs attention so that it can work with "ordinary" deps (e.g. static libs)
+    # as well as generator deps (which are object-libraries which need special casing)
+    set(ALLDEPS $<TARGET_OBJECTS:${OBJLIB}>)
+    foreach(DEP ${args_DEPS})
+      list(APPEND ALLDEPS $<TARGET_OBJECTS:${DEP}_library>)
+      add_dependencies("${OBJLIB}" "${DEP}")
+      target_include_directories("${OBJLIB}" PRIVATE $<TARGET_PROPERTY:${DEP},INTERFACE_INCLUDE_DIRECTORIES>)
+    endforeach()
   endif()
 
-  add_executable("${NAME}_binary" ${ALLDEPS})
-  target_link_libraries("${NAME}_binary" PRIVATE ${HALIDE_COMPILER_LIB} ${HALIDE_SYSTEM_LIBS} ${CMAKE_DL_LIBS} ${CMAKE_THREAD_LIBS_INIT} _halide_gengen)
+  add_executable("${NAME}_binary" ${ALLDEPS} "${HALIDE_TOOLS_DIR}/GenGen.cpp")
+  _set_cxx_options("${NAME}_binary")
+  target_link_libraries("${NAME}_binary" PRIVATE ${HALIDE_COMPILER_LIB} ${HALIDE_SYSTEM_LIBS} ${CMAKE_DL_LIBS} ${CMAKE_THREAD_LIBS_INIT})
   target_include_directories("${NAME}_binary" PRIVATE "${HALIDE_TOOLS_DIR}")
   set_target_properties("${NAME}_binary" PROPERTIES FOLDER "generator")
   if (MSVC)
@@ -254,7 +229,6 @@ function(halide_generator NAME)
     "${NAME}_stub_gen"
     GENERATOR_BINARY "${NAME}_binary"
     GENERATOR_ARGS   "${GENERATOR_EXEC_ARGS}"
-    GENFILES_DIR     "${GENFILES_DIR}"
     OUTPUTS          "${STUB_HDR}"
   )
   set_property(TARGET "${NAME}_stub_gen" PROPERTY HALIDE_GENERATOR_NAME "${args_GENERATOR_NAME}")
@@ -289,7 +263,6 @@ function(_halide_library_runtime GENERATOR_HALIDE_TARGET OUTVAR)
       "${RUNTIME_NAME}_runtime_gen"
       GENERATOR_BINARY "halide_library_runtime.generator_binary"
       GENERATOR_ARGS   "${GENERATOR_EXEC_ARGS}"
-      GENFILES_DIR     "${GENFILES_DIR}"
       OUTPUTS          "${GENFILES_DIR}/${RUNTIME_LIB}"
     )
 
@@ -371,7 +344,6 @@ function(halide_library_from_generator BASENAME)
     "${BASENAME}_lib_gen"
     GENERATOR_BINARY "${args_GENERATOR}_binary"
     GENERATOR_ARGS   "${GENERATOR_EXEC_ARGS}"
-    GENFILES_DIR     ${GENFILES_DIR}
     OUTPUTS          ${OUTPUTS}
   )
 
