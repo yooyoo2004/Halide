@@ -15,8 +15,32 @@ function(halide_use_image_io TARGET)
   endforeach()
 endfunction()
 
-if("${HALIDE_SRC_DIR}" STREQUAL "")
-  set(HALIDE_SRC_DIR "${CMAKE_SOURCE_DIR}")
+# If paths to tools, include, and libHalide aren't specified, infer them
+# based on the path to the distrib folder. If the path to the distrib
+# folder isn't specified, fail.
+if("${HALIDE_TOOLS_DIR}" STREQUAL "" OR 
+    "${HALIDE_INCLUDE_DIR}" STREQUAL "" OR 
+    "${HALIDE_COMPILER_LIB}" STREQUAL "")
+  if("${HALIDE_DISTRIB_DIR}" STREQUAL "")
+    message(FATAL_ERROR "HALIDE_DISTRIB_DIR must point to the Halide distribution directory.")
+  endif()
+  set(HALIDE_INCLUDE_DIR "${HALIDE_DISTRIB_DIR}/include")
+  set(HALIDE_TOOLS_DIR "${HALIDE_DISTRIB_DIR}/tools")
+  add_library(_halide_compiler_lib INTERFACE)
+  set_target_properties(_halide_compiler_lib PROPERTIES INTERFACE_INCLUDE_DIRECTORIES ${HALIDE_INCLUDE_DIR})
+  set_target_properties(_halide_compiler_lib PROPERTIES INTERFACE_LINK_LIBRARIES "${HALIDE_DISTRIB_DIR}/lib/libHalide${CMAKE_STATIC_LIBRARY_SUFFIX}")
+  set(HALIDE_COMPILER_LIB _halide_compiler_lib)
+endif()
+
+if("${HALIDE_SYSTEM_LIBS}" STREQUAL "")
+  # If HALIDE_SYSTEM_LIBS isn't defined, we are compiling against a Halide distribution
+  # folder; this is normally captured in the halide_config.cmake file. If that file
+  # exists in the same directory as this one, just include it here.
+  if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/halide_config.cmake")
+    include("${CMAKE_CURRENT_LIST_DIR}/halide_config.cmake")
+  else()
+    message(FATAL_ERROR "HALIDE_SYSTEM_LIBS is not set and we could not find halide_config.cmake")
+  endif()
 endif()
 
 define_property(TARGET PROPERTY HALIDE_GENERATOR_NAME
@@ -134,16 +158,21 @@ function(_halide_generator_add_exec_generator_target EXEC_TARGET)
   set(multiValueArgs OUTPUTS GENERATOR_ARGS)
   cmake_parse_arguments(args "" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
+  set(BIN_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+  if("${BIN_DIR}" STREQUAL "")
+    set(BIN_DIR "${CMAKE_BINARY_DIR}")
+  endif()
+
   if(MSVC)
     # In MSVC, the generator executable will be placed in a configuration specific
     # directory specified by ${CMAKE_CFG_INTDIR}.
-    set(EXEC_PATH "${CMAKE_BINARY_DIR}/bin/${CMAKE_CFG_INTDIR}/${args_GENERATOR_BINARY}${CMAKE_EXECUTABLE_SUFFIX}")
+    set(EXEC_PATH "${BIN_DIR}/${CMAKE_CFG_INTDIR}/${args_GENERATOR_BINARY}${CMAKE_EXECUTABLE_SUFFIX}")
   elseif(XCODE)
     # In Xcode, the generator executable will be placed in a configuration specific
     # directory, so the Xcode variable $(CONFIGURATION) is passed in the custom build script.
-    set(EXEC_PATH "${CMAKE_BINARY_DIR}/bin/$(CONFIGURATION)/${args_GENERATOR_BINARY}${CMAKE_EXECUTABLE_SUFFIX}")
+    set(EXEC_PATH "${BIN_DIR}/$(CONFIGURATION)/${args_GENERATOR_BINARY}${CMAKE_EXECUTABLE_SUFFIX}")
   else()
-    set(EXEC_PATH "${CMAKE_BINARY_DIR}/bin/${args_GENERATOR_BINARY}${CMAKE_EXECUTABLE_SUFFIX}")
+    set(EXEC_PATH "${BIN_DIR}/${args_GENERATOR_BINARY}${CMAKE_EXECUTABLE_SUFFIX}")
   endif()
 
   # This "target" will always be built.
@@ -167,12 +196,6 @@ function(halide_generator NAME)
   set(multiValueArgs SRCS DEPS INCLUDES)
   cmake_parse_arguments(args "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
-  if ("${HALIDE_LIB_PATH}" STREQUAL "")
-    set(LOCAL_HALIDE_LIB_PATH Halide)
-  else()
-    set(LOCAL_HALIDE_LIB_PATH "${HALIDE_LIB_PATH}")
-  endif()
-
   if(NOT ${NAME} MATCHES "^.*\\.generator$")
     message(FATAL_ERROR "halide_generator rules must have names that end in .generator (${NAME})")
   endif()
@@ -190,11 +213,14 @@ function(halide_generator NAME)
   # "You have called ADD_LIBRARY for library halide_library_runtime.generator_library without any source files."
   # It is harmless but would be nice to remove.
   add_library("${OBJLIB}" OBJECT ${args_SRCS})
+  # Ensure that Halide.h is built prior to any Generator
+  add_dependencies("${OBJLIB}" ${HALIDE_COMPILER_LIB})
   # if args_SRCS is empty (eg for runtime) CMake may get confused; help it out
   set_target_properties("${OBJLIB}" PROPERTIES LINKER_LANGUAGE C++)
-  add_dependencies("${OBJLIB}" ${LOCAL_HALIDE_LIB_PATH})  # ensure Halide.h is built
-  target_include_directories("${OBJLIB}" PRIVATE "${CMAKE_BINARY_DIR}/include")
-  target_include_directories("${OBJLIB}" PRIVATE "${args_INCLUDES}")
+  target_include_directories("${OBJLIB}" PRIVATE 
+                             "${args_INCLUDES}"
+                             "${HALIDE_INCLUDE_DIR}" 
+                             "${HALIDE_TOOLS_DIR}")
   _set_cxx_options("${OBJLIB}")
 
   # TODO: this needs attention so that it can work with "ordinary" deps (e.g. static libs)
@@ -206,10 +232,15 @@ function(halide_generator NAME)
     target_include_directories("${OBJLIB}" PRIVATE $<TARGET_PROPERTY:${DEP},INTERFACE_INCLUDE_DIRECTORIES>)
   endforeach()
 
-  add_executable("${NAME}_binary" "${HALIDE_SRC_DIR}/tools/GenGen.cpp" ${ALLDEPS})
-  # TODO remove z
-  target_link_libraries("${NAME}_binary" PRIVATE ${LOCAL_HALIDE_LIB_PATH} z ${CMAKE_DL_LIBS} ${CMAKE_THREAD_LIBS_INIT})
-  target_include_directories("${NAME}_binary" PRIVATE "${HALIDE_SRC_DIR}/include" "${HALIDE_SRC_DIR}/tools")
+  if(NOT TARGET _halide_gengen)
+    add_library(_halide_gengen "${HALIDE_TOOLS_DIR}/GenGen.cpp")
+    target_link_libraries(_halide_gengen PRIVATE ${HALIDE_COMPILER_LIB})
+    _set_cxx_options(_halide_gengen)
+  endif()
+
+  add_executable("${NAME}_binary" ${ALLDEPS})
+  target_link_libraries("${NAME}_binary" PRIVATE ${HALIDE_COMPILER_LIB} ${HALIDE_SYSTEM_LIBS} ${CMAKE_DL_LIBS} ${CMAKE_THREAD_LIBS_INIT} _halide_gengen)
+  target_include_directories("${NAME}_binary" PRIVATE "${HALIDE_TOOLS_DIR}")
   set_target_properties("${NAME}_binary" PROPERTIES FOLDER "generator")
   if (MSVC)
     target_link_libraries("${NAME}_binary" PRIVATE Kernel32)
@@ -360,14 +391,14 @@ function(halide_library_from_generator BASENAME)
 
   # ------ Code to build the RunGen target
   if(NOT TARGET _halide_library_from_generator_rungen)
-    add_library(_halide_library_from_generator_rungen "${HALIDE_SRC_DIR}/tools/RunGen.cpp")
-    target_include_directories(_halide_library_from_generator_rungen PRIVATE "${CMAKE_SOURCE_DIR}/src/runtime")
+    add_library(_halide_library_from_generator_rungen "${HALIDE_TOOLS_DIR}/RunGen.cpp")
+    target_include_directories(_halide_library_from_generator_rungen PRIVATE "${HALIDE_INCLUDE_DIR}")
     halide_use_image_io(_halide_library_from_generator_rungen)
     _set_cxx_options(_halide_library_from_generator_rungen)
   endif()
 
   set(RUNGEN "${BASENAME}.rungen")
-  add_executable("${RUNGEN}" "${HALIDE_SRC_DIR}/tools/RunGenStubs.cpp")
+  add_executable("${RUNGEN}" "${HALIDE_TOOLS_DIR}/RunGenStubs.cpp")
   target_compile_definitions("${RUNGEN}" PRIVATE "-DHL_RUNGEN_FILTER_HEADER=\"${BASENAME}.h\"")
   target_link_libraries("${RUNGEN}" PRIVATE _halide_library_from_generator_rungen "${BASENAME}" ${args_FILTER_DEPS})
 

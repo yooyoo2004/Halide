@@ -10,34 +10,18 @@
 project(wavelet)
 cmake_minimum_required(VERSION 3.1.3)
 
-set(CMAKE_CXX_STANDARD 11)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-
-include(../../HalideGenerator.cmake)
-
-# HalideGenerator.cmake makes this assumptions
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
-set(CMAKE_SOURCE_DIR "${HALIDE_SRC_DIR}")
-
-SET(HALIDE_SRC_DIR "${CMAKE_CURRENT_LIST_DIR}/../../" CACHE PATH "Root of Halide source Tree")
-include_directories("${HALIDE_SRC_DIR}/apps/support")
-include_directories("${HALIDE_SRC_DIR}/include")
-include_directories("${HALIDE_SRC_DIR}/tools")
-
-SET(HALIDE_LIB_PATH ${HALIDE_SRC_DIR}/lib/libHalide.a)
+# HalideGenerator.cmake requires this be set to point to the Halide distribution folder we use.
+# This assumes it's built at the toplevel via 'make distrib' (ironically, the CMake build isn't
+# yet capable of producing a distrib folder).
+set(HALIDE_DISTRIB_DIR "${CMAKE_CURRENT_LIST_DIR}/../../distrib")
+include("${HALIDE_DISTRIB_DIR}/HalideGenerator.cmake")
 
 add_executable(wavelet "${CMAKE_CURRENT_SOURCE_DIR}/wavelet.cpp")
-if (MSVC)
-  target_compile_options(wavelet PRIVATE "/GR-")
-else()
-  target_compile_options(wavelet PRIVATE "-fno-rtti")
-endif()
-
+set_target_properties(wavelet PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
+target_include_directories(wavelet PRIVATE "${HALIDE_INCLUDE_DIR}" "${HALIDE_TOOLS_DIR}")
 halide_use_image_io(wavelet)
 
 file(GLOB GENS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/*_generator.cpp")
-
 foreach(GEN_SRC ${GENS})
     string(REPLACE "_generator.cpp" "" GEN_NAME "${GEN_SRC}")
     halide_library("${GEN_NAME}" SRCS ${GEN_SRC})
