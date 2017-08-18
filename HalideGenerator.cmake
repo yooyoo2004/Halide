@@ -357,7 +357,7 @@ function(halide_library_from_generator BASENAME)
   if (${_lib_index} GREATER -1)
     add_dependencies("${BASENAME}" "${RUNTIME_NAME}")
     set_target_properties("${BASENAME}" PROPERTIES 
-      INTERFACE_LINK_LIBRARIES "${GENFILES_DIR}/${FILTER_LIB};${RUNTIME_NAME}")
+      INTERFACE_LINK_LIBRARIES "${GENFILES_DIR}/${FILTER_LIB};${RUNTIME_NAME};${CMAKE_DL_LIBS};${CMAKE_THREAD_LIBS_INIT}")
   endif()
 
 
