@@ -189,6 +189,15 @@ function(halide_generator NAME)
     set(args_GENERATOR_NAME "${BASENAME}")
   endif()
 
+  add_executable("${NAME}_binary" "${HALIDE_TOOLS_DIR}/GenGen.cpp")
+  _set_cxx_options("${NAME}_binary")
+  target_link_libraries("${NAME}_binary" PRIVATE ${HALIDE_COMPILER_LIB} ${HALIDE_SYSTEM_LIBS} ${CMAKE_DL_LIBS} ${CMAKE_THREAD_LIBS_INIT})
+  target_include_directories("${NAME}_binary" PRIVATE "${HALIDE_TOOLS_DIR}")
+  set_target_properties("${NAME}_binary" PROPERTIES FOLDER "generator")
+  if (MSVC)
+    target_link_libraries("${NAME}_binary" PRIVATE Kernel32)
+  endif()
+
   list(LENGTH args_SRCS SRCSLEN)
   # Don't create empty object-library: that can cause quiet failures in MSVC builds.
   if("${SRCSLEN}" GREATER 0)
@@ -207,31 +216,23 @@ function(halide_generator NAME)
       target_include_directories("${OBJLIB}" PRIVATE 
                                  $<TARGET_PROPERTY:${DEP},INTERFACE_INCLUDE_DIRECTORIES>)
     endforeach()
-  endif()
 
-  add_executable("${NAME}_binary" "${HALIDE_TOOLS_DIR}/GenGen.cpp")
-  _set_cxx_options("${NAME}_binary")
-  target_link_libraries("${NAME}_binary" PRIVATE ${HALIDE_COMPILER_LIB} ${HALIDE_SYSTEM_LIBS} ${CMAKE_DL_LIBS} ${CMAKE_THREAD_LIBS_INIT})
-  # We need to ensure that the libraries are linked in with --whole-archive
-  # (or the equivalent), to ensure that the Generator-registration code
-  # isn't omitted. Sadly, there's no portable way to do this, so we do some
-  # special-casing here:
-  if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-    #target_link_libraries("${NAME}_binary" PRIVATE -Wl,-all_load "${OBJLIB}" -Wl,-noall_load)
-    target_link_libraries("${NAME}_binary" PRIVATE "${OBJLIB}")
-    set_target_properties("${NAME}_binary" PROPERTIES LINK_FLAGS -Wl,-all_load)
-  elseif(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
-    # Note that this requires VS2015 R2+
-    target_link_libraries("${NAME}_binary" PRIVATE "${OBJLIB}")
-    set_target_properties("${NAME}_binary" PROPERTIES LINK_FLAGS "/WHOLEARCHIVE:${OBJLIB}")
-  else()
-    # Assume Linux or similar
-    target_link_libraries("${NAME}_binary" PRIVATE -Wl,--whole-archive "${OBJLIB}" -Wl,-no-whole-archive)
-  endif()
-  target_include_directories("${NAME}_binary" PRIVATE "${HALIDE_TOOLS_DIR}")
-  set_target_properties("${NAME}_binary" PROPERTIES FOLDER "generator")
-  if (MSVC)
-    target_link_libraries("${NAME}_binary" PRIVATE Kernel32)
+    # We need to ensure that the libraries are linked in with --whole-archive
+    # (or the equivalent), to ensure that the Generator-registration code
+    # isn't omitted. Sadly, there's no portable way to do this, so we do some
+    # special-casing here:
+    if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+      #target_link_libraries("${NAME}_binary" PRIVATE -Wl,-all_load "${OBJLIB}" -Wl,-noall_load)
+      target_link_libraries("${NAME}_binary" PRIVATE "${OBJLIB}")
+      set_target_properties("${NAME}_binary" PROPERTIES LINK_FLAGS -Wl,-all_load)
+    elseif(MSVC)
+      # Note that this requires VS2015 R2+
+      target_link_libraries("${NAME}_binary" PRIVATE "${OBJLIB}")
+      set_target_properties("${NAME}_binary" PROPERTIES LINK_FLAGS "/WHOLEARCHIVE:${OBJLIB}.lib")
+    else()
+      # Assume Linux or similar
+      target_link_libraries("${NAME}_binary" PRIVATE -Wl,--whole-archive "${OBJLIB}" -Wl,-no-whole-archive)
+    endif()
   endif()
 
   _halide_generator_genfiles_dir(${BASENAME} GENFILES_DIR)
@@ -250,7 +251,9 @@ function(halide_generator NAME)
   add_library("${NAME}" INTERFACE)
   add_dependencies("${NAME}" "${NAME}_stub_gen")
   set_target_properties("${NAME}" PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${GENFILES_DIR}")
-  set_target_properties("${NAME}" PROPERTIES INTERFACE_LINK_LIBRARIES "${OBJLIB}")
+  if("${SRCSLEN}" GREATER 0)
+    set_target_properties("${NAME}" PROPERTIES INTERFACE_LINK_LIBRARIES "${OBJLIB}")
+  endif()
 endfunction(halide_generator)
 
 # Generate the runtime library for the given halide_target; return
@@ -369,7 +372,7 @@ function(halide_library_from_generator BASENAME)
   if (${_lib_index} GREATER -1)
     add_dependencies("${BASENAME}" "${RUNTIME_NAME}")
     set_target_properties("${BASENAME}" PROPERTIES 
-      INTERFACE_LINK_LIBRARIES "${GENFILES_DIR}/${FILTER_LIB};${RUNTIME_NAME};${args_FILTER_DEPS};${CMAKE_DL_LIBS};${CMAKE_THREAD_LIBS_INIT}")
+      INTERFACE_LINK_LIBRARIES "${GENFILES_DIR}/${FILTER_LIB};${RUNTIME_NAME};${CMAKE_DL_LIBS};${CMAKE_THREAD_LIBS_INIT}")
   endif()
 
 
@@ -384,7 +387,7 @@ function(halide_library_from_generator BASENAME)
   set(RUNGEN "${BASENAME}.rungen")
   add_executable("${RUNGEN}" "${HALIDE_TOOLS_DIR}/RunGenStubs.cpp")
   target_compile_definitions("${RUNGEN}" PRIVATE "-DHL_RUNGEN_FILTER_HEADER=\"${BASENAME}.h\"")
-  target_link_libraries("${RUNGEN}" PRIVATE _halide_library_from_generator_rungen "${BASENAME}")
+  target_link_libraries("${RUNGEN}" PRIVATE _halide_library_from_generator_rungen "${BASENAME}" ${args_FILTER_DEPS})
 
   # Not all Generators will build properly with RunGen (e.g., missing
   # external dependencies), so exclude them from the "ALL" targets
