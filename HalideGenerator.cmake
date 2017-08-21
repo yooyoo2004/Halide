@@ -222,7 +222,6 @@ function(halide_generator NAME)
     # isn't omitted. Sadly, there's no portable way to do this, so we do some
     # special-casing here:
     if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-      #target_link_libraries("${NAME}_binary" PRIVATE -Wl,-all_load "${OBJLIB}" -Wl,-noall_load)
       target_link_libraries("${NAME}_binary" PRIVATE "${OBJLIB}")
       set_target_properties("${NAME}_binary" PROPERTIES LINK_FLAGS -Wl,-all_load)
     elseif(MSVC)
@@ -372,7 +371,7 @@ function(halide_library_from_generator BASENAME)
   if (${_lib_index} GREATER -1)
     add_dependencies("${BASENAME}" "${RUNTIME_NAME}")
     set_target_properties("${BASENAME}" PROPERTIES 
-      INTERFACE_LINK_LIBRARIES "${GENFILES_DIR}/${FILTER_LIB};${RUNTIME_NAME};${CMAKE_DL_LIBS};${CMAKE_THREAD_LIBS_INIT}")
+      INTERFACE_LINK_LIBRARIES "${GENFILES_DIR}/${FILTER_LIB};${RUNTIME_NAME};${args_FILTER_DEPS};${CMAKE_DL_LIBS};${CMAKE_THREAD_LIBS_INIT}")
   endif()
 
 
@@ -387,7 +386,7 @@ function(halide_library_from_generator BASENAME)
   set(RUNGEN "${BASENAME}.rungen")
   add_executable("${RUNGEN}" "${HALIDE_TOOLS_DIR}/RunGenStubs.cpp")
   target_compile_definitions("${RUNGEN}" PRIVATE "-DHL_RUNGEN_FILTER_HEADER=\"${BASENAME}.h\"")
-  target_link_libraries("${RUNGEN}" PRIVATE _halide_library_from_generator_rungen "${BASENAME}" ${args_FILTER_DEPS})
+  target_link_libraries("${RUNGEN}" PRIVATE _halide_library_from_generator_rungen "${BASENAME}")
 
   # Not all Generators will build properly with RunGen (e.g., missing
   # external dependencies), so exclude them from the "ALL" targets
