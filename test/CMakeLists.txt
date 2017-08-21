@@ -114,8 +114,6 @@ function(halide_define_aot_test NAME)
     target_link_libraries("${TARGET}" PUBLIC "${NAME}")
   endif()
 
-  target_link_libraries("${TARGET}" PRIVATE ${args_FILTER_DEPS})
-
   run_after_build("generator_aot_${NAME}")
 
 endfunction(halide_define_aot_test)
