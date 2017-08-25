@@ -1604,14 +1604,16 @@ $(DISTRIB_DIR)/halide.tgz: $(LIB_DIR)/libHalide.a \
 						   $(INCLUDE_DIR)/Halide.h \
 						   $(RUNTIME_EXPORTED_INCLUDES) \
 						   $(ROOT_DIR)/bazel/* \
-						   $(BUILD_DIR)/halide_config.bzl
+						   $(BUILD_DIR)/halide_config.bzl \
+						   $(BUILD_DIR)/halide_config.cmake \
+						   $(ROOT_DIR)/HalideGenerator.cmake
 	mkdir -p $(DISTRIB_DIR)/include \
-	         $(DISTRIB_DIR)/bin \
-	         $(DISTRIB_DIR)/lib \
-	         $(DISTRIB_DIR)/tutorial \
-	         $(DISTRIB_DIR)/tutorial/images \
-	         $(DISTRIB_DIR)/tools \
-	         $(DISTRIB_DIR)/tutorial/figures
+			 $(DISTRIB_DIR)/bin \
+			 $(DISTRIB_DIR)/lib \
+			 $(DISTRIB_DIR)/tutorial \
+			 $(DISTRIB_DIR)/tutorial/images \
+			 $(DISTRIB_DIR)/tools \
+			 $(DISTRIB_DIR)/tutorial/figures
 	cp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(DISTRIB_DIR)/bin
 	cp $(LIB_DIR)/libHalide.a $(DISTRIB_DIR)/lib
 	cp $(INCLUDE_DIR)/Halide.h $(DISTRIB_DIR)/include
@@ -1638,6 +1640,7 @@ $(DISTRIB_DIR)/halide.tgz: $(LIB_DIR)/libHalide.a \
 	cp $(ROOT_DIR)/bazel/README_bazel.md $(DISTRIB_DIR)
 	cp $(ROOT_DIR)/bazel/WORKSPACE $(DISTRIB_DIR)
 	cp $(BUILD_DIR)/halide_config.* $(DISTRIB_DIR)
+	cp $(ROOT_DIR)/HalideGenerator.cmake $(DISTRIB_DIR)
 	ln -sf $(DISTRIB_DIR) halide
 	tar -czf $(DISTRIB_DIR)/halide.tgz \
 		halide/bin \
@@ -1649,6 +1652,7 @@ $(DISTRIB_DIR)/halide.tgz: $(LIB_DIR)/libHalide.a \
 		halide/README_bazel.md \
 		halide/WORKSPACE \
 		halide/*.bzl \
+		halide/*.cmake \
 		halide/tools/mex_halide.m \
 		halide/tools/*.cpp \
 		halide/tools/halide_benchmark.h \

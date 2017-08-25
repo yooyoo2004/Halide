@@ -15,104 +15,318 @@ function(halide_use_image_io TARGET)
   endforeach()
 endfunction()
 
-function(halide_generator_genfiles_dir NAME OUTVAR)
-  set(GENFILES_DIR "${CMAKE_BINARY_DIR}/generator_genfiles/${NAME}")
+# If paths to tools, include, and libHalide aren't specified, infer them
+# based on the path to the distrib folder. If the path to the distrib
+# folder isn't specified, fail.
+if("${HALIDE_TOOLS_DIR}" STREQUAL "" OR 
+    "${HALIDE_INCLUDE_DIR}" STREQUAL "" OR 
+    "${HALIDE_COMPILER_LIB}" STREQUAL "")
+  if("${HALIDE_DISTRIB_DIR}" STREQUAL "")
+    message(FATAL_ERROR "HALIDE_DISTRIB_DIR must point to the Halide distribution directory.")
+  endif()
+  set(HALIDE_INCLUDE_DIR "${HALIDE_DISTRIB_DIR}/include")
+  set(HALIDE_TOOLS_DIR "${HALIDE_DISTRIB_DIR}/tools")
+  add_library(_halide_compiler_lib INTERFACE)
+  set_target_properties(_halide_compiler_lib PROPERTIES INTERFACE_INCLUDE_DIRECTORIES ${HALIDE_INCLUDE_DIR})
+  set_target_properties(_halide_compiler_lib PROPERTIES INTERFACE_LINK_LIBRARIES "${HALIDE_DISTRIB_DIR}/lib/libHalide${CMAKE_STATIC_LIBRARY_SUFFIX}")
+  set(HALIDE_COMPILER_LIB _halide_compiler_lib)
+endif()
+
+if("${HALIDE_SYSTEM_LIBS}" STREQUAL "")
+  # If HALIDE_SYSTEM_LIBS isn't defined, we are compiling against a Halide distribution
+  # folder; this is normally captured in the halide_config.cmake file. If that file
+  # exists in the same directory as this one, just include it here.
+  if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/halide_config.cmake")
+    include("${CMAKE_CURRENT_LIST_DIR}/halide_config.cmake")
+  else()
+    message(FATAL_ERROR "HALIDE_SYSTEM_LIBS is not set and we could not find halide_config.cmake")
+  endif()
+endif()
+
+define_property(TARGET PROPERTY HALIDE_GENERATOR_NAME
+                BRIEF_DOCS "Internal use by Halide build rules"
+                FULL_DOCS "Internal use by Halide build rules")
+
+function(_set_cxx_options TARGET)
+  set_target_properties("${TARGET}" PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
+  if (MSVC)
+    target_compile_definitions("${TARGET}" PUBLIC "-D_CRT_SECURE_NO_WARNINGS" "-D_SCL_SECURE_NO_WARNINGS")
+    target_compile_options("${TARGET}" PRIVATE "/GR-")
+  else()
+    target_compile_options("${TARGET}" PRIVATE "-fno-rtti")
+  endif()
+endfunction()
+
+function(_halide_generator_genfiles_dir NAME OUTVAR)
+  set(GENFILES_DIR "${CMAKE_BINARY_DIR}/genfiles/${NAME}")
   file(MAKE_DIRECTORY "${GENFILES_DIR}")
   set(${OUTVAR} "${GENFILES_DIR}" PARENT_SCOPE)
 endfunction()
 
-function(halide_generator_get_exec_path TARGET OUTVAR)
-  if(MSVC)
-    # In MSVC, the generator executable will be placed in a configuration specific
-    # directory specified by ${CMAKE_CFG_INTDIR}.
-    set(${OUTVAR} "${CMAKE_BINARY_DIR}/bin/${CMAKE_CFG_INTDIR}/${TARGET}${CMAKE_EXECUTABLE_SUFFIX}" PARENT_SCOPE)
-  elseif(XCODE)
-    # In Xcode, the generator executable will be placed in a configuration specific
-    # directory, so the Xcode variable $(CONFIGURATION) is passed in the custom build script.
-    set(${OUTVAR} "${CMAKE_BINARY_DIR}/bin/$(CONFIGURATION)/${TARGET}${CMAKE_EXECUTABLE_SUFFIX}" PARENT_SCOPE)
-  else()
-    set(${OUTVAR} "${CMAKE_BINARY_DIR}/bin/${TARGET}${CMAKE_EXECUTABLE_SUFFIX}" PARENT_SCOPE)
-  endif()
-endfunction()
+# Adds features to a target string, canonicalizing the result.
+# If multitarget, features are added to all.
+function(_add_target_features HALIDE_TARGET HALIDE_FEATURES OUTVAR)
+  string(REPLACE "," ";" MULTITARGETS "${HALIDE_TARGET}")
+  foreach(T ${MULTITARGETS})
+    string(REPLACE "-" ";" NEW_T "${T}")
+    foreach(F ${HALIDE_FEATURES})
+      list(APPEND NEW_T ${F})
+    endforeach()
+    string(REPLACE ";" "-" NEW_T "${NEW_T}")
+    _canonicalize_target("${NEW_T}" NEW_T)    
+    list(APPEND NEW_MULTITARGETS ${NEW_T})
+  endforeach()
+  string(REPLACE ";" "," NEW_MULTITARGETS "${NEW_MULTITARGETS}")
+  set(${OUTVAR} "${NEW_MULTITARGETS}" PARENT_SCOPE)
+endfunction(_add_target_features)
 
-function(halide_generator_add_exec_generator_target EXEC_TARGET)
+# Split the target into base and feature lists.
+function(_split_target HALIDE_TARGET OUTVAR_BASE OUTVAR_FEATURES)
+  if("${HALIDE_TARGET}" MATCHES ".*,.*")
+    message(FATAL_ERROR "Multitarget may not be specified in _split_target(${HALIDE_TARGET})")
+  endif()
+
+  string(REPLACE "-" ";" FEATURES "${HALIDE_TARGET}")
+  list(LENGTH FEATURES LEN)
+  if("${LEN}" EQUAL 0)
+    message(FATAL_ERROR "Empty target")
+  endif()
+
+  list(GET FEATURES 0 BASE)
+  if ("${BASE}" STREQUAL "host")
+    list(REMOVE_AT FEATURES 0)
+  else()
+    if("${LEN}" LESS 3)
+      message(FATAL_ERROR "Illegal target (${HALIDE_TARGET})")
+    endif()
+    list(GET FEATURES 0 1 2 BASE)
+    list(REMOVE_AT FEATURES 0 1 2)
+  endif()
+  set(${OUTVAR_BASE} "${BASE}" PARENT_SCOPE)
+  set(${OUTVAR_FEATURES} "${FEATURES}" PARENT_SCOPE)
+endfunction(_split_target)
+
+# Join base and feature lists back into a target. Do not canonicalize.
+function(_join_target BASE FEATURES OUTVAR)
+  foreach(F ${FEATURES})
+    list(APPEND BASE ${F})
+  endforeach()
+  string(REPLACE ";" "-" BASE "${BASE}")
+  set(${OUTVAR} "${BASE}" PARENT_SCOPE)
+endfunction(_join_target)
+
+# Alphabetizes the features part of the target to make sure they always match no
+# matter the concatenation order of the target string pieces. Remove duplicates.
+function(_canonicalize_target HALIDE_TARGET OUTVAR)
+  if("${HALIDE_TARGET}" MATCHES ".*,.*")
+    message(FATAL_ERROR "Multitarget may not be specified in _canonicalize_target(${HALIDE_TARGET})")
+  endif()
+  _split_target("${HALIDE_TARGET}" BASE FEATURES)
+  list(REMOVE_DUPLICATES FEATURES)
+  list(SORT FEATURES)
+  _join_target("${BASE}" "${FEATURES}" HALIDE_TARGET)
+  set(${OUTVAR} "${HALIDE_TARGET}" PARENT_SCOPE)
+endfunction(_canonicalize_target)
+
+# Given a HALIDE_TARGET return the CMake target name for the runtime.
+function(_halide_library_runtime_target_name HALIDE_TARGET OUTVAR)
+  # MULTITARGETS = HALIDE_TARGET.split(",")
+  string(REPLACE "," ";" MULTITARGETS "${HALIDE_TARGET}")
+  # HALIDE_TARGET = MULTITARGETS.final_element()
+  list(GET MULTITARGETS -1 HALIDE_TARGET)
+  _canonicalize_target("${HALIDE_TARGET}" HALIDE_TARGET)
+  _split_target("${HALIDE_TARGET}" BASE FEATURES)
+  # Discard target features which do not affect the contents of the runtime.
+  list(REMOVE_DUPLICATES FEATURES)
+  list(REMOVE_ITEM FEATURES "user_context" "no_asserts" "no_bounds_query" "profile")
+  list(SORT FEATURES)
+  # Now build up the name
+  set(RESULT "halide_library_runtime")
+  foreach(B ${BASE})
+    list(APPEND RESULT ${B})
+  endforeach()
+  foreach(F ${FEATURES})
+    list(APPEND RESULT ${F})
+  endforeach()
+  string(REPLACE ";" "_" RESULT "${RESULT}")
+  set(${OUTVAR} "${RESULT}" PARENT_SCOPE)
+endfunction(_halide_library_runtime_target_name)
+
+function(_halide_generator_add_exec_generator_target EXEC_TARGET)
   set(options )
-  set(oneValueArgs GENERATOR_TARGET GENFILES_DIR)
+  set(oneValueArgs GENERATOR_BINARY)
   set(multiValueArgs OUTPUTS GENERATOR_ARGS)
   cmake_parse_arguments(args "" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
-  halide_generator_get_exec_path(${args_GENERATOR_TARGET} EXEC_PATH)
-
-  add_custom_command(
-    OUTPUT ${args_OUTPUTS}
-    DEPENDS ${args_GENERATOR_TARGET}
-    COMMAND ${EXEC_PATH} ${args_GENERATOR_ARGS}
-    WORKING_DIRECTORY ${args_GENFILES_DIR}
-    COMMENT "Executing Generator ${args_GENERATOR_TARGET} with args ${args_GENERATOR_ARGS}..."
-  )
-
   add_custom_target(${EXEC_TARGET} DEPENDS ${args_OUTPUTS})
   set_target_properties(${EXEC_TARGET} PROPERTIES FOLDER "generator")
+
+  # As of CMake 3.x, add_custom_command() recognizes executable target names in its COMMAND.
+  add_custom_command(
+    OUTPUT ${args_OUTPUTS}
+    DEPENDS ${args_GENERATOR_BINARY}
+    COMMAND ${args_GENERATOR_BINARY} ${args_GENERATOR_ARGS}
+  )
+  foreach(OUT ${args_OUTPUTS})
+    set_source_files_properties(${OUT} PROPERTIES GENERATED TRUE)
+  endforeach()
 endfunction()
 
-# This function adds custom build steps to invoke a Halide generator executable
-# and produce a static library containing the generated code.
-#
-# The generator executable must be produced separately, e.g. using a call to the
-# function halide_add_generator() or halide_project(...) or add_executable(...) 
-# and passed to this function in the GENERATOR_TARGET parameter.
-#
-# Usage:
-#   halide_add_aot_library(<name>
-#                          GENERATOR_TARGET <target>
-#                          GENERATOR_NAME <string>
-#                          GENERATED_FUNCTION <string>
-#                          GENERATOR_OUTPUTS <arg> <arg> ...
-#                          GENERATOR_ARGS <arg> <arg> ...)
-#
-#   <name> is the name of the library being defined.
-#   GENERATOR_TARGET is the name of the generator executable target, which is assumed to be
-#       defined elsewhere.
-#   GENERATOR_TARGET is the name of the generator executable target, which is assumed to be
-#       defined elsewhere.
-#   GENERATOR_NAME is the registered name of the Halide::Generator derived object
-#   GENERATED_FUNCTION is the name of the C function to be generated by Halide, including C++ 
-#       namespace (if any); if omitted, default to GENERATOR_NAME
-#   GENERATOR_OUTPUTS are the values to pass to -e; if omitted, defaults to "h static_library"
-#   GENERATOR_ARGS are optional extra arguments passed to the generator executable during
-#     build.
-function(halide_add_aot_library AOT_LIBRARY_TARGET)
-  # Parse arguments
+function(halide_generator NAME)
+# TODO DEPS other than stubs
+  set(oneValueArgs GENERATOR_NAME)
+  set(multiValueArgs SRCS DEPS INCLUDES)
+  cmake_parse_arguments(args "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+  if(NOT ${NAME} MATCHES "^.*\\.generator$")
+    message(FATAL_ERROR "halide_generator rules must have names that end in .generator (${NAME})")
+  endif()
+
+  # BASENAME = strip_suffix(${NAME}, ".generator")
+  string(REGEX REPLACE "\\.generator*$" "" BASENAME ${NAME})
+
+  if ("${args_GENERATOR_NAME}" STREQUAL "")
+    set(args_GENERATOR_NAME "${BASENAME}")
+  endif()
+
+  add_executable("${NAME}_binary" "${HALIDE_TOOLS_DIR}/GenGen.cpp")
+  _set_cxx_options("${NAME}_binary")
+  target_link_libraries("${NAME}_binary" PRIVATE ${HALIDE_COMPILER_LIB} ${HALIDE_SYSTEM_LIBS} ${CMAKE_DL_LIBS} ${CMAKE_THREAD_LIBS_INIT})
+  target_include_directories("${NAME}_binary" PRIVATE "${HALIDE_TOOLS_DIR}")
+  set_target_properties("${NAME}_binary" PROPERTIES FOLDER "generator")
+  if (MSVC)
+    target_link_libraries("${NAME}_binary" PRIVATE Kernel32)
+  endif()
+
+  list(LENGTH args_SRCS SRCSLEN)
+  # Don't create empty object-library: that can cause quiet failures in MSVC builds.
+  if("${SRCSLEN}" GREATER 0)
+    set(GENLIB "${NAME}_library")
+    add_library("${GENLIB}" STATIC ${args_SRCS})
+    # Ensure that Halide.h is built prior to any Generator
+    add_dependencies("${GENLIB}" ${HALIDE_COMPILER_LIB})
+    target_include_directories("${GENLIB}" PRIVATE 
+                               "${args_INCLUDES}"
+                               "${HALIDE_INCLUDE_DIR}" 
+                               "${HALIDE_TOOLS_DIR}")
+    _set_cxx_options("${GENLIB}")
+    target_link_libraries("${GENLIB}" ${args_DEPS})
+    foreach(DEP ${args_DEPS})
+      target_include_directories("${GENLIB}" PRIVATE 
+                                 $<TARGET_PROPERTY:${DEP},INTERFACE_INCLUDE_DIRECTORIES>)
+    endforeach()
+
+    # We need to ensure that the libraries are linked in with --whole-archive
+    # (or the equivalent), to ensure that the Generator-registration code
+    # isn't omitted. Sadly, there's no portable way to do this, so we do some
+    # special-casing here:
+    if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+      target_link_libraries("${NAME}_binary" PRIVATE "${GENLIB}")
+      set_target_properties("${NAME}_binary" PROPERTIES LINK_FLAGS -Wl,-all_load)
+    elseif(MSVC)
+      # Note that this requires VS2015 R2+
+      target_link_libraries("${NAME}_binary" PRIVATE "${GENLIB}")
+      set_target_properties("${NAME}_binary" PROPERTIES LINK_FLAGS "/WHOLEARCHIVE:${GENLIB}.lib")
+    else()
+      # Assume Linux or similar
+      target_link_libraries("${NAME}_binary" PRIVATE -Wl,--whole-archive "${GENLIB}" -Wl,-no-whole-archive)
+    endif()
+  endif()
+
+  _halide_generator_genfiles_dir(${BASENAME} GENFILES_DIR)
+  set(STUB_HDR "${GENFILES_DIR}/${BASENAME}.stub.h")
+  set(GENERATOR_EXEC_ARGS "-g" "${args_GENERATOR_NAME}" "-o" "${GENFILES_DIR}" "-e" "cpp_stub" "-n" "${BASENAME}")
+
+  _halide_generator_add_exec_generator_target(
+    "${NAME}_stub_gen"
+    GENERATOR_BINARY "${NAME}_binary"
+    GENERATOR_ARGS   "${GENERATOR_EXEC_ARGS}"
+    OUTPUTS          "${STUB_HDR}"
+  )
+  set_property(TARGET "${NAME}_stub_gen" PROPERTY HALIDE_GENERATOR_NAME "${args_GENERATOR_NAME}")
+
+  # Make a header-only library that exports the include path
+  add_library("${NAME}" INTERFACE)
+  add_dependencies("${NAME}" "${NAME}_stub_gen")
+  set_target_properties("${NAME}" PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${GENFILES_DIR}")
+  if("${SRCSLEN}" GREATER 0)
+    set_target_properties("${NAME}" PROPERTIES INTERFACE_LINK_LIBRARIES "${GENLIB}")
+  endif()
+endfunction(halide_generator)
+
+# Generate the runtime library for the given halide_target; return
+# its cmake target name in outvar.
+function(_halide_library_runtime GENERATOR_HALIDE_TARGET OUTVAR)
+  if(NOT TARGET halide_library_runtime.generator)
+    halide_generator(halide_library_runtime.generator SRCS "")
+  endif()
+
+  string(REPLACE "," ";" MULTITARGETS "${GENERATOR_HALIDE_TARGET}")
+  list(GET MULTITARGETS -1 GENERATOR_HALIDE_TARGET)
+  _halide_library_runtime_target_name("${GENERATOR_HALIDE_TARGET}" RUNTIME_NAME)
+  if(NOT TARGET "${RUNTIME_NAME}")
+    set(RUNTIME_LIB "${RUNTIME_NAME}${CMAKE_STATIC_LIBRARY_SUFFIX}")
+
+    _halide_generator_genfiles_dir(${RUNTIME_NAME} GENFILES_DIR)
+    set(GENERATOR_EXEC_ARGS "-o" "${GENFILES_DIR}")
+    list(APPEND GENERATOR_EXEC_ARGS "-r" "${RUNTIME_NAME}")
+    list(APPEND GENERATOR_EXEC_ARGS "target=${GENERATOR_HALIDE_TARGET}")
+
+    _halide_generator_add_exec_generator_target(
+      "${RUNTIME_NAME}_runtime_gen"
+      GENERATOR_BINARY "halide_library_runtime.generator_binary"
+      GENERATOR_ARGS   "${GENERATOR_EXEC_ARGS}"
+      OUTPUTS          "${GENFILES_DIR}/${RUNTIME_LIB}"
+    )
+
+    add_library("${RUNTIME_NAME}" INTERFACE)
+    add_dependencies("${RUNTIME_NAME}" "${RUNTIME_NAME}_runtime_gen")
+    set_target_properties("${RUNTIME_NAME}" PROPERTIES INTERFACE_LINK_LIBRARIES "${GENFILES_DIR}/${RUNTIME_LIB}")
+  endif()
+  set(${OUTVAR} "${RUNTIME_NAME}" PARENT_SCOPE)  
+endfunction(_halide_library_runtime)
+
+# TODO do we want to use halide_target_features instead of GENERATOR_HALIDE_TARGET?
+function(halide_library_from_generator BASENAME)
   set(options )
-  set(oneValueArgs GENERATOR_TARGET GENERATOR_NAME GENERATED_FUNCTION)
+  set(oneValueArgs GENERATOR FUNCTION_NAME GENERATOR_HALIDE_TARGET)
   set(multiValueArgs GENERATOR_ARGS GENERATOR_OUTPUTS FILTER_DEPS)
   cmake_parse_arguments(args "" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
-  if (args_GENERATED_FUNCTION STREQUAL "")
-    set(args_GENERATED_FUNCTION ${args_GENERATOR_NAME})
+  if ("${args_GENERATOR}" STREQUAL "")
+    set(args_GENERATOR "${BASENAME}.generator")
+  endif()
+
+  get_property(GENERATOR_NAME TARGET "${args_GENERATOR}_stub_gen" PROPERTY HALIDE_GENERATOR_NAME)
+
+  if ("${args_FUNCTION_NAME}" STREQUAL "")
+    set(args_FUNCTION_NAME "${BASENAME}")
   endif()
 
   # Create a directory to contain generator specific intermediate files
-  halide_generator_genfiles_dir(${AOT_LIBRARY_TARGET} GENFILES_DIR)
+  _halide_generator_genfiles_dir(${BASENAME} GENFILES_DIR)
 
   # Determine the name of the output files
-  set(FILTER_LIB "${AOT_LIBRARY_TARGET}${CMAKE_STATIC_LIBRARY_SUFFIX}")
-  set(FILTER_HDR "${AOT_LIBRARY_TARGET}.h")
-  set(FILTER_CPP "${AOT_LIBRARY_TARGET}.cpp")
-
-  if ("${args_GENERATOR_NAME}" STREQUAL "")
-    set(args_GENERATOR_NAME "${AOT_LIBRARY_TARGET}")
-  endif()
+  set(FILTER_LIB "${BASENAME}${CMAKE_STATIC_LIBRARY_SUFFIX}")
+  set(FILTER_HDR "${BASENAME}.h")
+  set(FILTER_CPP "${BASENAME}.cpp")
 
   set(GENERATOR_EXEC_ARGS "-o" "${GENFILES_DIR}")
-  list(APPEND GENERATOR_EXEC_ARGS "-g" "${args_GENERATOR_NAME}")
-  if (NOT ${args_GENERATED_FUNCTION} STREQUAL "")
-    list(APPEND GENERATOR_EXEC_ARGS "-f" "${args_GENERATED_FUNCTION}" )
+  list(APPEND GENERATOR_EXEC_ARGS "-g" "${GENERATOR_NAME}")
+  if (NOT ${args_FUNCTION_NAME} STREQUAL "")
+    list(APPEND GENERATOR_EXEC_ARGS "-f" "${args_FUNCTION_NAME}" )
   endif()
   if (NOT "${args_GENERATOR_OUTPUTS}" STREQUAL "")
     string(REPLACE ";" "," _tmp "${args_GENERATOR_OUTPUTS}")
     list(APPEND GENERATOR_EXEC_ARGS "-e" ${_tmp})
   endif()
+  if ("${args_GENERATOR_HALIDE_TARGET}" STREQUAL "")
+    set(args_GENERATOR_HALIDE_TARGET "host")
+  endif()
+  # Select the runtime to use *before* adding no_runtime
+  _halide_library_runtime("${args_GENERATOR_HALIDE_TARGET}" RUNTIME_NAME)
+  _add_target_features("${args_GENERATOR_HALIDE_TARGET}" "no_runtime" args_GENERATOR_HALIDE_TARGET)
+  list(APPEND GENERATOR_EXEC_ARGS "target=${args_GENERATOR_HALIDE_TARGET}")
   # GENERATOR_ARGS always come last
   list(APPEND GENERATOR_EXEC_ARGS ${args_GENERATOR_ARGS})
 
@@ -132,154 +346,81 @@ function(halide_add_aot_library AOT_LIBRARY_TARGET)
   endif()
   if (${_h_index} GREATER -1)
     list(APPEND OUTPUTS "${GENFILES_DIR}/${FILTER_HDR}")
-    set_source_files_properties("${GENFILES_DIR}/${FILTER_HDR}" PROPERTIES GENERATED TRUE)
   endif()
   if (${_cpp_index} GREATER -1)
     list(APPEND OUTPUTS "${GENFILES_DIR}/${FILTER_CPP}")
-    set_source_files_properties("${GENFILES_DIR}/${FILTER_HDR}" PROPERTIES GENERATED TRUE)
   endif()
 
-  halide_generator_add_exec_generator_target(
-    "${AOT_LIBRARY_TARGET}.exec_generator"
-    GENERATOR_TARGET ${args_GENERATOR_TARGET} 
+  _halide_generator_add_exec_generator_target(
+    "${BASENAME}_lib_gen"
+    GENERATOR_BINARY "${args_GENERATOR}_binary"
     GENERATOR_ARGS   "${GENERATOR_EXEC_ARGS}"
-    GENFILES_DIR     ${GENFILES_DIR}
     OUTPUTS          ${OUTPUTS}
   )
 
-  # ------ Code to build the RunGen target
+  # -------------------
 
-  set(RUNGEN "${AOT_LIBRARY_TARGET}.rungen")
-  add_executable("${RUNGEN}" "${CMAKE_SOURCE_DIR}/tools/RunGenStubs.cpp")
-  target_compile_definitions("${RUNGEN}" PRIVATE "-DHL_RUNGEN_FILTER_HEADER=\"${AOT_LIBRARY_TARGET}.h\"")
-  target_link_libraries("${RUNGEN}" PRIVATE HalideToolsRunGen)
-  halide_add_aot_library_dependency("${RUNGEN}" "${AOT_LIBRARY_TARGET}")
-  target_link_libraries("${RUNGEN}" PRIVATE ${args_FILTER_DEPS})
+  add_library("${BASENAME}" INTERFACE)
+  add_dependencies("${BASENAME}" "${BASENAME}_lib_gen")
+  if (${_h_index} GREATER -1)
+    set_target_properties("${BASENAME}" PROPERTIES INTERFACE_INCLUDE_DIRECTORIES ${GENFILES_DIR})
+  endif()
+  if (${_lib_index} GREATER -1)
+    add_dependencies("${BASENAME}" "${RUNTIME_NAME}")
+    set_target_properties("${BASENAME}" PROPERTIES 
+      INTERFACE_LINK_LIBRARIES "${GENFILES_DIR}/${FILTER_LIB};${RUNTIME_NAME};${args_FILTER_DEPS};${CMAKE_DL_LIBS};${CMAKE_THREAD_LIBS_INIT}")
+  endif()
+
+
+  # ------ Code to build the RunGen target
+  if(NOT TARGET _halide_library_from_generator_rungen)
+    add_library(_halide_library_from_generator_rungen "${HALIDE_TOOLS_DIR}/RunGen.cpp")
+    target_include_directories(_halide_library_from_generator_rungen PRIVATE "${HALIDE_INCLUDE_DIR}")
+    halide_use_image_io(_halide_library_from_generator_rungen)
+    _set_cxx_options(_halide_library_from_generator_rungen)
+  endif()
+
+  set(RUNGEN "${BASENAME}.rungen")
+  add_executable("${RUNGEN}" "${HALIDE_TOOLS_DIR}/RunGenStubs.cpp")
+  target_compile_definitions("${RUNGEN}" PRIVATE "-DHL_RUNGEN_FILTER_HEADER=\"${BASENAME}.h\"")
+  target_link_libraries("${RUNGEN}" PRIVATE _halide_library_from_generator_rungen "${BASENAME}")
 
   # Not all Generators will build properly with RunGen (e.g., missing
   # external dependencies), so exclude them from the "ALL" targets
   set_target_properties("${RUNGEN}" PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
-  add_custom_target("${AOT_LIBRARY_TARGET}.run" 
+  add_custom_target("${BASENAME}.run" 
                     COMMAND "${RUNGEN}" "$(RUNARGS)"
                     DEPENDS "${RUNGEN}")
-  set_target_properties("${AOT_LIBRARY_TARGET}.run" PROPERTIES EXCLUDE_FROM_ALL TRUE)
+  set_target_properties("${BASENAME}.run" PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
-  # ---------
+endfunction(halide_library_from_generator)
 
-endfunction(halide_add_aot_library)
-
-# Usage:
-#   halide_add_aot_library_dependency(TARGET AOT_LIBRARY_TARGET)
-function(halide_add_aot_library_dependency TARGET AOT_LIBRARY_TARGET)
-    halide_generator_genfiles_dir(${AOT_LIBRARY_TARGET} GENFILES_DIR)
-  
-    add_dependencies("${TARGET}" "${AOT_LIBRARY_TARGET}.exec_generator")
-
-    set(FILTER_LIB "${AOT_LIBRARY_TARGET}${CMAKE_STATIC_LIBRARY_SUFFIX}")
-    target_link_libraries("${TARGET}" PRIVATE "${GENFILES_DIR}/${FILTER_LIB}")
-    target_include_directories("${TARGET}" PRIVATE "${GENFILES_DIR}")
-
-    if (WIN32)
-      if (MSVC)
-        # /FORCE:multiple allows clobbering the halide runtime symbols in the lib
-        # linker warnings disabled: 
-        # 4006: "already defined, second definition ignored"
-        # 4088: "/FORCE used, image may not work"
-        # (Note that MSVC apparently considers 4088 too important to allow us to ignore it;
-        # I'm nevertheless leaving this here to document that we don't care about it.)
-        set_target_properties("${TARGET}" PROPERTIES LINK_FLAGS "/STACK:8388608,1048576 /FORCE:multiple /ignore:4006 /ignore:4088")
-      else()
-        set_target_properties("${TARGET}" PROPERTIES LINK_FLAGS "-Wl,--allow-multiple-definition")
-      endif()
-    else()
-      target_link_libraries("${TARGET}" PRIVATE dl pthread z)
-    endif()
-endfunction(halide_add_aot_library_dependency)
-
-function(halide_add_generator NAME)
-  set(options WITH_STUB)
-  set(oneValueArgs STUB_GENERATOR_NAME)
-  set(multiValueArgs SRCS STUB_DEPS)
+function(halide_library NAME)
+  set(oneValueArgs GENERATOR_NAME FUNCTION_NAME GENERATOR_HALIDE_TARGET)
+  set(multiValueArgs SRCS GENERATOR_DEPS FILTER_DEPS INCLUDES GENERATOR_ARGS GENERATOR_OUTPUTS)
   cmake_parse_arguments(args "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
-  # We need to generate an "object" library for every generator, so that any
-  # generator that depends on our stub can link in our generator as well. 
-  # Unfortunately, an ordinary static library won't do: CMake has no way to
-  # force "alwayslink=1", and a static library with just a self-registering
-  # Generator is almost certain to get optimized away at link time. Using
-  # an "Object Library" lets us dodge this (it basically just groups .o files
-  # together and presents them at the end), at the cost of some decidedly
-  # ugly bits right here.
-  set(OBJLIB "${NAME}.objlib")
-  add_library("${OBJLIB}" OBJECT ${args_SRCS})
-  add_dependencies("${OBJLIB}" Halide)
-  target_include_directories("${OBJLIB}" PRIVATE "${CMAKE_BINARY_DIR}/include")
-  if (NOT MSVC)
-    target_compile_options("${OBJLIB}" PRIVATE "-std=c++11") # Halide clients need C++11
-    target_compile_options("${OBJLIB}" PRIVATE "-fno-rtti")
-  endif()
-  foreach(STUB ${args_STUB_DEPS})
-    halide_add_generator_stub_dependency(TARGET ${OBJLIB} STUB_GENERATOR_TARGET ${STUB})
-  endforeach()
+  halide_generator("${NAME}.generator"
+                   SRCS ${args_SRCS}
+                   DEPS ${args_GENERATOR_DEPS}
+                   INCLUDES ${args_INCLUDES}
+                   GENERATOR_NAME ${args_GENERATOR_NAME})
 
-  set(ALLSTUBS $<TARGET_OBJECTS:${OBJLIB}>)
-  foreach(STUB ${args_STUB_DEPS})
-    list(APPEND ALLSTUBS $<TARGET_OBJECTS:${STUB}.objlib>)
-  endforeach()
+  halide_library_from_generator("${NAME}"
+                   DEPS ${args_FILTER_DEPS}
+                   GENERATOR "${NAME}.generator"
+                   FUNCTION_NAME ${args_FUNCTION_NAME}
+                   GENERATOR_HALIDE_TARGET ${args_GENERATOR_HALIDE_TARGET}
+                   GENERATOR_ARGS ${args_GENERATOR_ARGS}
+                   GENERATOR_OUTPUTS ${args_GENERATOR_OUTPUTS})
+endfunction(halide_library)
 
-  halide_project("${NAME}" 
-                 "generator" 
-                 "${CMAKE_SOURCE_DIR}/tools/GenGen.cpp"
-                 ${ALLSTUBS})
+function(halide_add_aot_cpp_dependency TARGET AOT_LIBRARY_TARGET)
+  _halide_generator_genfiles_dir(${AOT_LIBRARY_TARGET} GENFILES_DIR)
 
-  # Declare a stub library if requested.
-  if (${args_WITH_STUB})
-    halide_add_generator_stub_library(STUB_GENERATOR_TARGET "${NAME}"
-                                      STUB_GENERATOR_NAME ${args_STUB_GENERATOR_NAME})
-  endif()
+  add_library(${AOT_LIBRARY_TARGET}.cpplib STATIC "${GENFILES_DIR}/${AOT_LIBRARY_TARGET}.cpp")
+  target_link_libraries("${TARGET}" PRIVATE ${AOT_LIBRARY_TARGET}.cpplib)
+  target_include_directories("${TARGET}" PRIVATE "${GENFILES_DIR}")
+endfunction(halide_add_aot_cpp_dependency)
 
-  # Add any stub deps passed to us.
-endfunction(halide_add_generator)
-
-function(halide_add_generator_stub_library)
-  set(options )
-  set(oneValueArgs STUB_GENERATOR_TARGET STUB_GENERATOR_NAME)
-  set(multiValueArgs )
-  cmake_parse_arguments(args "" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
-
-  halide_generator_genfiles_dir(${args_STUB_GENERATOR_TARGET} GENFILES_DIR)
-
-  # STUBNAME_BASE = strip_suffix(STUB_GENERATOR_TARGET, ".generator")
-  string(REGEX REPLACE "\\.generator*$" "" STUBNAME_BASE ${args_STUB_GENERATOR_TARGET})
-
-  set(STUB_HDR "${GENFILES_DIR}/${STUBNAME_BASE}.stub.h")
-
-  set(GENERATOR_EXEC_ARGS "-o" "${GENFILES_DIR}" "-e" "cpp_stub")
-  if (NOT ${args_STUB_GENERATOR_NAME} STREQUAL "")
-    list(APPEND GENERATOR_EXEC_ARGS "-g" "${args_STUB_GENERATOR_NAME}")
-    list(APPEND GENERATOR_EXEC_ARGS "-n" "${STUBNAME_BASE}")
-  endif()
-
-  set(STUBGEN "${args_STUB_GENERATOR_TARGET}.exec_stub_generator")
-  halide_generator_add_exec_generator_target(${STUBGEN}
-    GENERATOR_TARGET ${args_STUB_GENERATOR_TARGET} 
-    GENERATOR_ARGS   "${GENERATOR_EXEC_ARGS}"
-    GENFILES_DIR     ${GENFILES_DIR}
-    OUTPUTS          "${STUB_HDR}"
-  )
-  set_source_files_properties("${STUB_HDR}" PROPERTIES GENERATED TRUE)
-endfunction(halide_add_generator_stub_library)
-
-function(halide_add_generator_stub_dependency)
-  # Parse arguments
-  set(options )
-  set(oneValueArgs TARGET STUB_GENERATOR_TARGET)
-  set(multiValueArgs )
-  cmake_parse_arguments(args "" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
-
-  halide_generator_genfiles_dir(${args_STUB_GENERATOR_TARGET} GENFILES_DIR)
-  set(STUBGEN "${args_STUB_GENERATOR_TARGET}.exec_stub_generator")
-  add_dependencies("${args_TARGET}" ${STUBGEN})
-  target_include_directories("${args_TARGET}" PRIVATE "${GENFILES_DIR}")
-endfunction(halide_add_generator_stub_dependency)

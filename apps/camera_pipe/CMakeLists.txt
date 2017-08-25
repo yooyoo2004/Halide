@@ -1,8 +1,8 @@
 # Generator
-halide_add_generator(camera_pipe.generator
+halide_generator(camera_pipe.generator
                      SRCS camera_pipe_generator.cpp)
-halide_add_aot_library(camera_pipe
-                       GENERATOR_TARGET camera_pipe.generator
+halide_library_from_generator(camera_pipe
+                       GENERATOR camera_pipe.generator
                        GENERATOR_ARGS target=host)
 
 # fcam
@@ -15,7 +15,7 @@ endif()
 
 # Final executable
 add_executable(process process.cpp)
-halide_add_aot_library_dependency(process camera_pipe)
+target_link_libraries(process PUBLIC camera_pipe)
 target_link_libraries(process PRIVATE ${curved_lib} fcam)
 halide_use_image_io(process)
 

@@ -1,18 +1,14 @@
 # Generator
-halide_add_generator(bilateral_grid.generator
+halide_generator(bilateral_grid.generator
                      SRCS bilateral_grid_generator.cpp)
-halide_add_aot_library(bilateral_grid
-                       GENERATOR_TARGET bilateral_grid.generator
-                       GENERATOR_ARGS target=host auto_schedule=false
-                       GENERATED_FUNCTION bilateral_grid)
-halide_add_aot_library(bilateral_grid_auto_schedule
-                       GENERATOR_NAME bilateral_grid
-                       GENERATOR_TARGET bilateral_grid.generator
-                       GENERATOR_ARGS target=host auto_schedule=true
-                       GENERATED_FUNCTION bilateral_grid_auto_schedule)
+halide_library_from_generator(bilateral_grid
+                       GENERATOR bilateral_grid.generator
+                       GENERATOR_ARGS target=host auto_schedule=false)
+halide_library_from_generator(bilateral_grid_auto_schedule
+                       GENERATOR bilateral_grid.generator
+                       GENERATOR_ARGS target=host auto_schedule=true)
 
 # Final executable
 add_executable(filter filter.cpp)
-halide_add_aot_library_dependency(filter bilateral_grid)
-halide_add_aot_library_dependency(filter bilateral_grid_auto_schedule)
+target_link_libraries(filter PUBLIC bilateral_grid bilateral_grid_auto_schedule)
 halide_use_image_io(filter)
