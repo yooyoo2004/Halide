@@ -236,7 +236,7 @@ function(halide_generator NAME)
 
   _halide_generator_genfiles_dir(${BASENAME} GENFILES_DIR)
   set(STUB_HDR "${GENFILES_DIR}/${BASENAME}.stub.h")
-  set(GENERATOR_EXEC_ARGS "-o" "${GENFILES_DIR}" "-e" "cpp_stub" "-n" "${BASENAME}")
+  set(GENERATOR_EXEC_ARGS "-g" "${args_GENERATOR_NAME}" "-o" "${GENFILES_DIR}" "-e" "cpp_stub" "-n" "${BASENAME}")
 
   _halide_generator_add_exec_generator_target(
     "${NAME}_stub_gen"
@@ -313,11 +313,9 @@ function(halide_library_from_generator BASENAME)
   set(FILTER_CPP "${BASENAME}.cpp")
 
   set(GENERATOR_EXEC_ARGS "-o" "${GENFILES_DIR}")
+  list(APPEND GENERATOR_EXEC_ARGS "-g" "${GENERATOR_NAME}")
   if (NOT ${args_FUNCTION_NAME} STREQUAL "")
     list(APPEND GENERATOR_EXEC_ARGS "-f" "${args_FUNCTION_NAME}" )
-  endif()
-  if (NOT ${GENERATOR_NAME} STREQUAL "")
-    list(APPEND GENERATOR_EXEC_ARGS "-g" "${GENERATOR_NAME}")
   endif()
   if (NOT "${args_GENERATOR_OUTPUTS}" STREQUAL "")
     string(REPLACE ";" "," _tmp "${args_GENERATOR_OUTPUTS}")

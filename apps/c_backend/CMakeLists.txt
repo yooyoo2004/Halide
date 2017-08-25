@@ -3,13 +3,11 @@ halide_generator(pipeline.generator
                      SRCS pipeline_generator.cpp)
 halide_library_from_generator(pipeline_c
                        GENERATOR pipeline.generator
-                       FUNCTION_NAME pipeline_c
                        GENERATOR_OUTPUTS cpp h
                        GENERATOR_ARGS target=host)
 
 halide_library_from_generator(pipeline_native
                        GENERATOR pipeline.generator
-                       FUNCTION_NAME pipeline_native
                        GENERATOR_OUTPUTS static_library h
                        GENERATOR_ARGS target=host)
 
@@ -17,12 +15,10 @@ halide_generator(pipeline_cpp.generator
                      SRCS pipeline_cpp_generator.cpp)
 halide_library_from_generator(pipeline_cpp_cpp
                        GENERATOR pipeline_cpp.generator
-                       FUNCTION_NAME pipeline_cpp_cpp
                        GENERATOR_OUTPUTS cpp h
                        GENERATOR_ARGS target=host-c_plus_plus_name_mangling)
 halide_library_from_generator(pipeline_cpp_native
                        GENERATOR pipeline_cpp.generator
-                       FUNCTION_NAME pipeline_cpp_native
                        GENERATOR_OUTPUTS static_library h
                        GENERATOR_ARGS target=host-c_plus_plus_name_mangling)
 

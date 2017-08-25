@@ -147,11 +147,12 @@ if (NOT MSVC)
   endif()
 else()
   add_compile_options(/W3)
-  message(WARNING "WARNINGS_AS_ERROR is currently ignored for MSVC")
-  # TODO: Uncomment below and remove above warning once we can build without warnings
-  #if (WARNINGS_AS_ERRORS)
-  #  add_compile_options(/WX)
-  #endif()
+  add_compile_options(/wd4018)  # disable "signed/unsigned mismatch"
+  add_compile_options(/wd4503)  # disable "decorated name length exceeded, name was truncated"
+  add_compile_options(/wd4267)  # disable "conversion from 'size_t' to 'int', possible loss of data"
+  if (WARNINGS_AS_ERRORS)
+    add_compile_options(/WX)
+  endif()
 endif()
 
 # Look for OpenMP

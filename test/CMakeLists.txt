@@ -101,6 +101,7 @@ function(halide_define_aot_test NAME)
   add_executable("${TARGET}" "${CMAKE_CURRENT_SOURCE_DIR}/generator/${NAME}_aottest.cpp")
   target_include_directories("${TARGET}" PRIVATE 
                              "${CMAKE_SOURCE_DIR}/tools" 
+                             "${CMAKE_SOURCE_DIR}" 
                              "${CMAKE_SOURCE_DIR}/src/runtime")
   set_target_properties("${TARGET}" PROPERTIES FOLDER "generator")
 
@@ -145,8 +146,7 @@ if (WITH_TEST_GENERATORS)
   simple_generator(multitarget)
   simple_generator(nested_externs)
   simple_generator(pyramid)
-  simple_generator(stubtest
-                   GENERATOR_NAME StubNS1::StubNS2::StubTest)
+  simple_generator(stubtest)
   # the stubuser generator needs the stub from stubtest
   simple_generator(stubuser
                    DEPS stubtest.generator)
@@ -221,10 +221,21 @@ if (WITH_TEST_GENERATORS)
                                   FUNCTION_NAME HalideTest::cxx_mangling_gpu
                                   GENERATOR_HALIDE_TARGET host-c_plus_plus_name_mangling-cuda)
     target_link_libraries(generator_aot_cxx_mangling PUBLIC cxx_mangling_gpu)
+  endif()
 
-    # TODO fails if Cuda not present
-    #halide_define_aot_test(gpu_object_lifetime
-    #                       GENERATOR_HALIDE_TARGET host-cuda-debug)
+  # gpu_object_lifetime can build with a variety of GPU targets (or none).
+  if(TARGET_PTX)
+    halide_define_aot_test(gpu_object_lifetime
+                           GENERATOR_HALIDE_TARGET host-cuda-debug)
+  elseif(TARGET_OPENCL)
+    halide_define_aot_test(gpu_object_lifetime
+                           GENERATOR_HALIDE_TARGET host-opencl-debug)
+  elseif(TARGET_METAL)
+    halide_define_aot_test(gpu_object_lifetime
+                           GENERATOR_HALIDE_TARGET host-metal-debug)
+  else()
+    halide_define_aot_test(gpu_object_lifetime
+                           GENERATOR_HALIDE_TARGET host-debug)
   endif()
 
   halide_define_aot_test(pyramid
