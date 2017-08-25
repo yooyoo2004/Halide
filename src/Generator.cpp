@@ -1,6 +1,7 @@
 #include <cmath>
 #include <fstream>
 #include <set>
+#include <dlfcn.h>
 
 #include "Generator.h"
 #include "Outputs.h"
@@ -175,6 +176,15 @@ Func make_param_func(const Parameter &p, const std::string &name) {
         f(args) = Internal::Call::make(p, args_expr);
     }
     return f;
+}
+
+std::unique_ptr<GeneratorBase> call_generator_factory(GeneratorFactoryFunc generator_factory,
+                                                      const GeneratorContext &context, 
+                                                      const std::map<std::string, std::string> &generator_params) {
+    std::unique_ptr<GeneratorBase> g;
+    generator_factory(context, generator_params, &g);
+    internal_assert(g != nullptr);
+    return g;
 }
 
 }  // namespace
@@ -502,6 +512,10 @@ void StubEmitter::emit() {
     stream << indent() << "#include \"Halide.h\"\n";
     stream << "\n";
 
+    stream << "extern \"C\" void\n"
+           << "hl_halide_register_generator_factory_" << generator_registered_name << "(const Halide::GeneratorContext&, const std::map<std::string, std::string>&, std::unique_ptr<Halide::Internal::GeneratorBase>*);\n";
+    stream << "\n";
+
     for (const auto &ns : namespaces) {
         stream << indent() << "namespace " << ns << " {\n";
     }
@@ -543,7 +557,7 @@ void StubEmitter::emit() {
     indent_level--;
     stream << indent() << ")\n";
     indent_level++;
-    stream << indent() << ": GeneratorStub(context, &factory, params.to_string_map(), {\n";
+    stream << indent() << ": GeneratorStub(context, ::hl_halide_register_generator_factory_" << generator_registered_name << ", params.to_string_map(), {\n";
     indent_level++;
     for (size_t i = 0; i < inputs.size(); ++i) {
         stream << indent() << "to_stub_input_vector(inputs." << inputs[i]->name() << ")";
@@ -692,16 +706,6 @@ void StubEmitter::emit() {
     stream << "\n";
 
     indent_level--;
-    stream << indent() << "private:\n";
-    indent_level++;
-    stream << indent() << "static std::unique_ptr<Halide::Internal::GeneratorBase> factory(const GeneratorContext& context, const std::map<std::string, std::string>& params) {\n";
-    indent_level++;
-    stream << indent() << "return Halide::Internal::GeneratorRegistry::create(\"" << generator_registered_name << "\", context, params);\n";
-    indent_level--;
-    stream << indent() << "};\n";
-    stream << "\n";
-
-    indent_level--;
     stream << indent() << "};\n";
     stream << "\n";
 
@@ -714,10 +718,10 @@ void StubEmitter::emit() {
 }
 
 GeneratorStub::GeneratorStub(const GeneratorContext &context,
-                             GeneratorFactory generator_factory,
+                             GeneratorFactoryFunc generator_factory,
                              const std::map<std::string, std::string> &generator_params,
                              const std::vector<std::vector<Internal::StubInput>> &inputs)
-    : generator(generator_factory(context, generator_params)) {
+    : generator(call_generator_factory(generator_factory, context, generator_params)) {
     generator->set_inputs_vector(inputs);
     generator->call_generate();
 }
@@ -789,7 +793,13 @@ const std::map<std::string, LoopLevel> &get_halide_looplevel_enum_map() {
     return halide_looplevel_enum_map;
 }
 
-int generate_filter_main(int argc, char **argv, std::ostream &cerr) {
+// struct dlcloser {
+//     void *handle;
+//     dlcloser(void *h) : handle(h) { }
+//     ~dlcloser() { if (handle) dlclose(handle); }
+// };
+
+int generate_filter_main(GeneratorFactoryFunc generator_factory, int argc, char **argv, std::ostream &cerr) {
     const char kUsage[] = "gengen [-g GENERATOR_NAME] [-f FUNCTION_NAME] [-o OUTPUT_DIR] [-r RUNTIME_NAME] [-e EMIT_OPTIONS] [-x EXTENSION_OPTIONS] [-n FILE_BASE_NAME] "
                           "target=target-string[,target-string...] [generator_arg=value [...]]\n\n"
                           "  -e  A comma separated list of files to emit. Accepted values are "
@@ -832,28 +842,61 @@ int generate_filter_main(int argc, char **argv, std::ostream &cerr) {
     }
 
     std::string runtime_name = flags_info["-r"];
-
-    std::vector<std::string> generator_names = GeneratorRegistry::enumerate();
-    if (generator_names.size() == 0 && runtime_name.empty()) {
-        cerr << "No generators have been registered and not compiling a standalone runtime\n";
-        cerr << kUsage;
-        return 1;
-    }
-
     std::string generator_name = flags_info["-g"];
     if (generator_name.empty() && runtime_name.empty()) {
         // Require either -g or -r to be specified: 
         // no longer infer the name when only one Generator is registered
-        cerr << "Either -g <name> or -r must be specified; available Generators are:\n";
-        if (!generator_names.empty()) {
-            for (auto name : generator_names) {
-                cerr << "    " << name << "\n";
-            }
-        } else {
-            cerr << "    <none>\n";
-        }
+        cerr << "Either -g <generator_name> or -r <runtime_name> must be specified.\n";
         return 1;
     }
+
+    // void *dl_handle = dlopen(nullptr, RTLD_LAZY);
+    // if (dl_handle == nullptr) {
+    //     cerr << "dlopen failed!\n";
+    //     return 1;
+    // }
+    // dlcloser closer(dl_handle);
+
+    std::unique_ptr<GeneratorBase> dummy_gen;
+    if (runtime_name.empty()) {
+
+// TODO: move this prefix to a constant
+        std::string entry_point = "hl_halide_register_generator_factory_" + generator_name;
+#ifdef _WIN32
+        void *factory_addr = ::GetProcAddressA(::GetModuleHandle(0), entry_point.c_str());
+        if (factory_addr == nullptr) {
+            cerr << "GetProcAddress failed:" << ::GetLastError() << "\n";
+            return 1;
+        }
+#else
+        void *factory_addr = dlsym(RTLD_DEFAULT, entry_point.c_str());
+        if (factory_addr == nullptr) {
+            cerr << "dlsym failed:" << dlerror() << "\n";
+            return 1;
+        }
+#endif
+
+        generator_factory = reinterpret_cast<GeneratorFactoryFunc>(factory_addr);
+        // if (factory_addr != reinterpret_cast<void*>(generator_factory)) {
+        //     cerr << "dlsym result did not match!\n";
+        //     return 1;
+        // }
+
+        cerr << "factory_addr " << factory_addr << " vs dlsym " << reinterpret_cast<void*>(generator_factory) << "\n";
+
+        // Create a Generator just so we can verify its name, to ensure things
+        // match, and to provide defaults if necessary. (We'll use this Generator
+        // later on if we emit a cpp_stub.)
+        // (Note that "JITGeneratorContext" is misleading, since we're actually doing 
+        // AOT here, but it does exactly what we need)
+        dummy_gen = call_generator_factory(generator_factory, JITGeneratorContext(Target()), {});
+        if (generator_name != dummy_gen->generator_registered_name) {
+            cerr << "generator name mismatch: expected " << generator_name 
+                 << ", saw " << dummy_gen->generator_registered_name << "\n";
+            return 1;
+        }
+    }
+
     std::string function_name = flags_info["-f"];
     if (function_name.empty()) {
         // If -f isn't specified, assume function name = generator name.
@@ -950,23 +993,23 @@ int generate_filter_main(int argc, char **argv, std::ostream &cerr) {
         std::string base_path = compute_base_path(output_dir, function_name, file_base_name);
         debug(1) << "Generator " << generator_name << " has base_path " << base_path << "\n";
         if (emit_options.emit_cpp_stub) {
-            // When generating cpp_stub, we ignore all generator args passed in, and supply a fake Target.
-            // (Note that "JITGeneratorContext" is misleading, since we're actually doing AOT here, but it does exactly what we need)
-            auto gen = GeneratorRegistry::create(generator_name, JITGeneratorContext(Target()), {});
+            // When generating cpp_stub, use the dummy_gen we created earlier,
+            // since it deliberately ignores all generator args and uses a fake Target.
             auto stub_file_path = base_path + get_extension(".stub.h", emit_options);
-            gen->emit_cpp_stub(stub_file_path);
+            dummy_gen->emit_cpp_stub(stub_file_path);
         }
 
         // Don't bother with this if we're just emitting a cpp_stub.
         if (!stub_only) {
             Outputs output_files = compute_outputs(targets[0], base_path, emit_options);
-            auto module_producer = [&generator_name, &generator_args]
+            auto module_producer = [&generator_name, &generator_args, &generator_factory]
                 (const std::string &name, const Target &target) -> Module {
                     auto sub_generator_args = generator_args;
                     sub_generator_args.erase("target");
                     // Must re-create each time since each instance will have a different Target.
-                    // (Note that "JITGeneratorContext" is misleading, since we're actually doing AOT here, but it does exactly what we need)
-                    auto gen = GeneratorRegistry::create(generator_name, JITGeneratorContext(target), sub_generator_args);
+                    // (Note that "JITGeneratorContext" is misleading, since we're actually doing 
+                    // AOT here, but it does exactly what we need)
+                    auto gen = call_generator_factory(generator_factory, JITGeneratorContext(target), sub_generator_args);
                     return gen->build_module(name);
                 };
             if (targets.size() > 1 || !emit_options.substitutions.empty()) {
@@ -1004,64 +1047,6 @@ void GeneratorParamBase::check_value_writable() const {
 
 void GeneratorParamBase::fail_wrong_type(const char *type) {
     user_error << "The GeneratorParam " << name << " cannot be set with a value of type " << type << ".\n";
-}
-
-/* static */
-GeneratorRegistry &GeneratorRegistry::get_registry() {
-    static GeneratorRegistry *registry = new GeneratorRegistry;
-    return *registry;
-}
-
-/* static */
-void GeneratorRegistry::register_factory(const std::string &name,
-                                         std::unique_ptr<GeneratorFactory> factory) {
-    user_assert(is_valid_name(name)) << "Invalid Generator name: " << name;
-    GeneratorRegistry &registry = get_registry();
-    std::lock_guard<std::mutex> lock(registry.mutex);
-    internal_assert(registry.factories.find(name) == registry.factories.end())
-        << "Duplicate Generator name: " << name;
-    registry.factories[name] = std::move(factory);
-}
-
-/* static */
-void GeneratorRegistry::unregister_factory(const std::string &name) {
-    GeneratorRegistry &registry = get_registry();
-    std::lock_guard<std::mutex> lock(registry.mutex);
-    internal_assert(registry.factories.find(name) != registry.factories.end())
-        << "Generator not found: " << name;
-    registry.factories.erase(name);
-}
-
-/* static */
-std::unique_ptr<GeneratorBase> GeneratorRegistry::create(const std::string &name,
-                                                         const GeneratorContext &context,
-                                                         const std::map<std::string, std::string> &params) {
-    GeneratorRegistry &registry = get_registry();
-    std::lock_guard<std::mutex> lock(registry.mutex);
-    auto it = registry.factories.find(name);
-    if (it == registry.factories.end()) {
-        std::ostringstream o;
-        o << "Generator not found: " << name << "\n";
-        o << "Did you mean:\n";
-        for (const auto &n : registry.factories) {
-            o << "    " << n.first << "\n";
-        }
-        user_error << o.str();
-    }
-    std::unique_ptr<GeneratorBase> g = it->second->create(context, params);
-    internal_assert(g != nullptr);
-    return g;
-}
-
-/* static */
-std::vector<std::string> GeneratorRegistry::enumerate() {
-    GeneratorRegistry &registry = get_registry();
-    std::lock_guard<std::mutex> lock(registry.mutex);
-    std::vector<std::string> result;
-    for (const auto& i : registry.factories) {
-        result.push_back(i.first);
-    }
-    return result;
 }
 
 GeneratorBase::GeneratorBase(size_t size, const void *introspection_helper) 
@@ -1483,6 +1468,19 @@ void GeneratorBase::check_input_is_array(Internal::GeneratorInputBase *in) {
 void GeneratorBase::check_input_kind(Internal::GeneratorInputBase *in, Internal::IOKind kind) {
     user_assert(in->kind() == kind)
         << "Input " << in->name() << " cannot be set with the type specified.";
+}
+
+/*static*/
+std::unique_ptr<GeneratorBase> GeneratorBase::generator_factory_impl(
+        const Halide::GeneratorContext& context,
+        const std::map<std::string, std::string> &params,
+        GeneratorCreateFunc create_func,
+        const char* registered_name,
+        const char* stub_name) {
+    std::unique_ptr<GeneratorBase> g = create_func(context);
+    g->set_generator_names(registered_name, stub_name);
+    g->set_generator_and_schedule_param_values(params);
+    return g;
 }
 
 GIOBase::GIOBase(size_t array_size, 
@@ -2099,3 +2097,11 @@ void generator_test() {
 
 }  // namespace Internal
 }  // namespace Halide
+
+extern "C" void hl_halide_register_generator_factory_runtime(
+                const Halide::GeneratorContext& context,
+                const std::map<std::string, std::string> &params,
+                std::unique_ptr<Halide::Internal::GeneratorBase> *generator_out) {
+    internal_error << "hl_halide_register_generator_factory_runtime should never be called\n";
+    generator_out->reset();
+}

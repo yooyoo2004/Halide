@@ -4,6 +4,7 @@
 # This is used for pure runtime tests which need to link against the Halide
 # runtime.
 halide_project(runtime.generator "generator" GenGen.cpp)
+target_compile_definitions(runtime.generator PRIVATE "-DHL_GENGEN_GENERATOR_NAME=runtime")
 
 add_library(HalideToolsRunGen "${CMAKE_SOURCE_DIR}/tools/RunGen.cpp")
 target_include_directories(HalideToolsRunGen PRIVATE "${CMAKE_SOURCE_DIR}/src/runtime")

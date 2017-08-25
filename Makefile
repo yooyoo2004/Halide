@@ -925,21 +925,16 @@ clean_generators:
 	rm -rf $(FILTERS_DIR)
 	rm -rf $(BIN_DIR)/*/generator_*
 	rm -rf $(BUILD_DIR)/*_generator.o
-	rm -f $(BUILD_DIR)/GenGen.o
 	rm -f $(BUILD_DIR)/RunGen.o
 
 time_compilation_tests: time_compilation_correctness time_compilation_performance time_compilation_generators
 
 LIBHALIDE_DEPS ?= $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h
 
-$(BUILD_DIR)/GenGen.o: $(ROOT_DIR)/tools/GenGen.cpp $(INCLUDE_DIR)/Halide.h
-	@mkdir -p $(@D)
-	$(CXX) -c $< $(TEST_CXX_FLAGS) -I$(INCLUDE_DIR) -o $@
-
 # Make an empty generator for generating runtimes.
-$(BIN_DIR)/runtime.generator: $(BUILD_DIR)/GenGen.o $(BIN_DIR)/libHalide.$(SHARED_EXT)
+$(BIN_DIR)/runtime.generator: $(ROOT_DIR)/tools/GenGen.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT)
 	@mkdir -p $(@D)
-	$(CXX) $< $(TEST_LD_FLAGS) -o $@
+	$(CXX) -DHL_GENGEN_GENERATOR_NAME=runtime $(TEST_CXX_FLAGS) -I$(INCLUDE_DIR) $(filter %.cpp %.o %.a,$^) $(TEST_LD_FLAGS) -o $@
 
 # Generate a standalone runtime for a given target string
 $(BIN_DIR)/%/runtime.a: $(BIN_DIR)/runtime.generator
@@ -1007,9 +1002,9 @@ $(BUILD_DIR)/%_generator.o: $(ROOT_DIR)/test/generator/%_generator.cpp $(INCLUDE
 	@mkdir -p $(@D)
 	$(CXX) $(TEST_CXX_FLAGS) -I$(INCLUDE_DIR) -I$(CURDIR)/$(FILTERS_DIR) -c $< -o $@
 
-$(BIN_DIR)/%.generator: $(BUILD_DIR)/GenGen.o $(BIN_DIR)/libHalide.$(SHARED_EXT) $(BUILD_DIR)/%_generator.o
+$(BIN_DIR)/%.generator: $(ROOT_DIR)/tools/GenGen.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(BUILD_DIR)/%_generator.o  $(INCLUDE_DIR)/Halide.h
 	@mkdir -p $(@D)
-	$(CXX) $(filter %.cpp %.o %.a,$^) $(TEST_LD_FLAGS) -o $@
+	$(CXX) -DHL_GENGEN_GENERATOR_NAME=$* $(TEST_CXX_FLAGS) -I$(INCLUDE_DIR) $(filter %.cpp %.o %.a,$^) $(TEST_LD_FLAGS) -o $@
 
 # It is not always possible to cross compile between 32-bit and 64-bit via the clang build as part of llvm
 # These next two rules can fail the compilationa nd produce zero length bitcode blobs.
@@ -1029,9 +1024,9 @@ $(BUILD_DIR)/external_code_extern_cpp_source.cpp : $(ROOT_DIR)/test/generator/ex
 	@mkdir -p $(@D)
 	./$(BIN_DIR)/binary2cpp external_code_extern_cpp_source < $(ROOT_DIR)/test/generator/external_code_extern.cpp > $@
 
-$(BIN_DIR)/external_code.generator: $(BUILD_DIR)/GenGen.o $(BIN_DIR)/libHalide.$(SHARED_EXT) $(BUILD_DIR)/external_code_generator.o $(BUILD_DIR)/external_code_extern_bitcode_32.cpp $(BUILD_DIR)/external_code_extern_bitcode_64.cpp $(BUILD_DIR)/external_code_extern_cpp_source.cpp
+$(BIN_DIR)/external_code.generator: $(ROOT_DIR)/tools/GenGen.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(BUILD_DIR)/external_code_generator.o $(BUILD_DIR)/external_code_extern_bitcode_32.cpp $(BUILD_DIR)/external_code_extern_bitcode_64.cpp $(BUILD_DIR)/external_code_extern_cpp_source.cpp
 	@mkdir -p $(@D)
-	$(CXX) $(filter %.cpp %.o %.a,$^) $(TEST_LD_FLAGS) -o $@
+	$(CXX) -DHL_GENGEN_GENERATOR_NAME=external_code $(TEST_CXX_FLAGS) -I$(INCLUDE_DIR) $(filter %.cpp %.o %.a,$^) $(TEST_LD_FLAGS) -o $@
 
 NAME_MANGLING_TARGET=$(NON_EMPTY_TARGET)-c_plus_plus_name_mangling
 
@@ -1193,7 +1188,11 @@ $(FILTERS_DIR)/external_code.cpp: $(BIN_DIR)/external_code.generator
 # some special casing to get right.  First, make a special rule to
 # build each of the Generators in nested_externs_generator.cpp (which
 # all have the form nested_externs_*).
-$(FILTERS_DIR)/nested_externs_%.a: $(BIN_DIR)/nested_externs.generator
+$(BIN_DIR)/nested_externs_%.generator: $(ROOT_DIR)/tools/GenGen.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(BUILD_DIR)/nested_externs_generator.o
+	@mkdir -p $(@D)
+	$(CXX) -DHL_GENGEN_GENERATOR_NAME=nested_externs_$* $(TEST_CXX_FLAGS) -I$(INCLUDE_DIR) $(filter %.cpp %.o %.a,$^) $(TEST_LD_FLAGS) -o $@
+
+$(FILTERS_DIR)/nested_externs_%.a: $(BIN_DIR)/nested_externs_%.generator
 	$(CURDIR)/$< -g nested_externs_$* $(GEN_AOT_OUTPUTS) -o $(CURDIR)/$(FILTERS_DIR) target=$(TARGET)-no_runtime
 
 GEN_AOT_CXX_FLAGS=$(TEST_CXX_FLAGS) -Wno-unknown-pragmas
@@ -1304,9 +1303,8 @@ $(BIN_DIR)/tutorial_%: $(ROOT_DIR)/tutorial/%.cpp $(BIN_DIR)/libHalide.$(SHARED_
 		-I$(INCLUDE_DIR) -I$(ROOT_DIR)/tools $(TEST_LD_FLAGS) $(IMAGE_IO_LIBS) -o $@;\
 	fi
 
-$(BIN_DIR)/tutorial_lesson_15_generators: $(ROOT_DIR)/tutorial/lesson_15_generators.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $(BUILD_DIR)/GenGen.o
-	$(CXX) $(TUTORIAL_CXX_FLAGS) $(IMAGE_IO_CXX_FLAGS) $(OPTIMIZE) $< $(BUILD_DIR)/GenGen.o \
-	-I$(INCLUDE_DIR) $(TEST_LD_FLAGS) $(IMAGE_IO_LIBS) -o $@
+$(BIN_DIR)/tutorial_lesson_15_generators: $(ROOT_DIR)/tutorial/lesson_15_generators.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $(ROOT_DIR)/tools/GenGen.cpp
+	$(CXX) $(TUTORIAL_CXX_FLAGS) $(IMAGE_IO_CXX_FLAGS) $(OPTIMIZE) $^ -I$(INCLUDE_DIR) $(TEST_LD_FLAGS) $(IMAGE_IO_LIBS) -o $@
 
 tutorial_lesson_15_generators: $(ROOT_DIR)/tutorial/lesson_15_generators_usage.sh $(BIN_DIR)/tutorial_lesson_15_generators
 	@-mkdir -p $(TMP_DIR)
@@ -1315,9 +1313,8 @@ tutorial_lesson_15_generators: $(ROOT_DIR)/tutorial/lesson_15_generators_usage.s
 	PATH="$${PATH}:$(CURDIR)/$(BIN_DIR)" source $(ROOT_DIR)/tutorial/lesson_15_generators_usage.sh
 	@-echo
 
-$(BIN_DIR)/tutorial_lesson_16_rgb_generate: $(ROOT_DIR)/tutorial/lesson_16_rgb_generate.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $(BUILD_DIR)/GenGen.o
-	$(CXX) $(TUTORIAL_CXX_FLAGS) $(IMAGE_IO_CXX_FLAGS) $(OPTIMIZE) $< $(BUILD_DIR)/GenGen.o \
-	-I$(INCLUDE_DIR) $(TEST_LD_FLAGS) $(IMAGE_IO_LIBS) -o $@
+$(BIN_DIR)/tutorial_lesson_16_rgb_generate: $(ROOT_DIR)/tutorial/lesson_16_rgb_generate.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $(ROOT_DIR)/tools/GenGen.cpp
+	$(CXX) $(TUTORIAL_CXX_FLAGS) $(IMAGE_IO_CXX_FLAGS) $(OPTIMIZE) $^ -I$(INCLUDE_DIR) $(TEST_LD_FLAGS) $(IMAGE_IO_LIBS) -o $@
 
 $(BIN_DIR)/tutorial_lesson_16_rgb_run: $(ROOT_DIR)/tutorial/lesson_16_rgb_run.cpp $(BIN_DIR)/tutorial_lesson_16_rgb_generate
 	@-mkdir -p $(TMP_DIR)

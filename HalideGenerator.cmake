@@ -232,6 +232,7 @@ function(halide_add_generator NAME)
                  "generator" 
                  "${CMAKE_SOURCE_DIR}/tools/GenGen.cpp"
                  ${ALLSTUBS})
+  target_compile_definitions("${NAME}" PRIVATE "-DHL_GENGEN_GENERATOR_NAME=${args_STUB_GENERATOR_NAME}")
 
   # Declare a stub library if requested.
   if (${args_WITH_STUB})

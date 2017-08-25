@@ -510,9 +510,9 @@ def _halide_library_runtime_target_name(halide_target_features = []):
 def _define_halide_library_runtime(halide_target_features = []):
   target_name = _halide_library_runtime_target_name(halide_target_features)
 
-  if not native.existing_rule("halide_library_runtime_generator"):
+  if not native.existing_rule("runtime_generator"):
     halide_generator(
-        name="halide_library_runtime_generator",
+        name="runtime_generator",
         srcs=[],
         deps=[],
         visibility=["//visibility:private"])
@@ -530,7 +530,7 @@ def _define_halide_library_runtime(halide_target_features = []):
         name=sub_name,
         filename=sub_name,
         generate_runtime=True,
-        generator_closure="halide_library_runtime_generator_closure",
+        generator_closure="runtime_generator_closure",
         halide_target=["-".join([halide_target] + _discard_useless_features(halide_target_features))],
         sanitizer=select({
             "@halide//:halide_config_msan": "msan",
@@ -607,12 +607,10 @@ def halide_generator(name,
 
   native.cc_binary(
       name="%s_binary" % name,
-      copts=copts + halide_language_copts(),
+      copts=copts + halide_language_copts() + ["-DHL_GENGEN_GENERATOR_NAME=%s" % generator_name],
       linkopts=halide_language_linkopts(),
-      deps=[
-          ":%s_library" % name,
-          "@halide//:gengen",
-      ],
+      srcs = [ "@halide//:tools/GenGen.cpp" ],
+      deps=[ ":%s_library" % name ],
       tags=["manual"] + tags,
       visibility=["//visibility:private"])
   _gengen_closure(

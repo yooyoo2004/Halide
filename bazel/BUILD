@@ -108,18 +108,6 @@ cc_library(
 # Please don't depend on it directly; doing so will likely break your code at
 # some point in the future.
 cc_library(
-    name = "gengen",
-    srcs = ["tools/GenGen.cpp"],
-    includes = ["include"],
-    deps = [":language"],
-)
-
-# This library is visibility:public, because any package that uses the
-# halide_library() rule will implicitly need access to it; that said, it is
-# intended only for the private, internal use of the halide_library() rule.
-# Please don't depend on it directly; doing so will likely break your code at
-# some point in the future.
-cc_library(
     name = "rungen",
     srcs = [
         "tools/RunGen.cpp",
@@ -134,5 +122,6 @@ cc_library(
 )
 
 exports_files([
+    "tools/GenGen.cpp",
     "tools/RunGenStubs.cpp",
 ])
