@@ -924,7 +924,7 @@ clean_generators:
 	rm -rf $(BIN_DIR)/*/runtime.a
 	rm -rf $(FILTERS_DIR)
 	rm -rf $(BIN_DIR)/*/generator_*
-	rm -rf $(BUILD_DIR)/*_generator.o
+	rm -rf $(BUILD_DIR)/*_generator.$(SHARED_EXT)
 	rm -f $(BUILD_DIR)/GenGen.o
 	rm -f $(BUILD_DIR)/RunGen.o
 
@@ -1003,13 +1003,13 @@ $(BIN_DIR)/auto_schedule_%: $(ROOT_DIR)/test/auto_schedule/%.cpp $(BIN_DIR)/libH
 # By default, %.generator is produced by building %_generator.cpp
 # Note that the rule includes all _generator.cpp files, so that generators with define_extern
 # usage can just add deps later.
-$(BUILD_DIR)/%_generator.o: $(ROOT_DIR)/test/generator/%_generator.cpp $(INCLUDE_DIR)/Halide.h
+$(BUILD_DIR)/%_generator.$(SHARED_EXT): $(ROOT_DIR)/test/generator/%_generator.cpp $(INCLUDE_DIR)/Halide.h
 	@mkdir -p $(@D)
 	$(CXX) $(TEST_CXX_FLAGS) -I$(INCLUDE_DIR) -I$(CURDIR)/$(FILTERS_DIR) -c $< -o $@
 
-$(BIN_DIR)/%.generator: $(BUILD_DIR)/GenGen.o $(BIN_DIR)/libHalide.$(SHARED_EXT) $(BUILD_DIR)/%_generator.o
+$(BIN_DIR)/%.generator: $(BUILD_DIR)/GenGen.o $(BIN_DIR)/libHalide.$(SHARED_EXT) $(BUILD_DIR)/%_generator.$(SHARED_EXT)
 	@mkdir -p $(@D)
-	$(CXX) $(filter %.cpp %.o %.a,$^) $(TEST_LD_FLAGS) -o $@
+	$(CXX) $^ $(TEST_LD_FLAGS) -o $@
 
 # It is not always possible to cross compile between 32-bit and 64-bit via the clang build as part of llvm
 # These next two rules can fail the compilationa nd produce zero length bitcode blobs.
@@ -1029,9 +1029,9 @@ $(BUILD_DIR)/external_code_extern_cpp_source.cpp : $(ROOT_DIR)/test/generator/ex
 	@mkdir -p $(@D)
 	./$(BIN_DIR)/binary2cpp external_code_extern_cpp_source < $(ROOT_DIR)/test/generator/external_code_extern.cpp > $@
 
-$(BIN_DIR)/external_code.generator: $(BUILD_DIR)/GenGen.o $(BIN_DIR)/libHalide.$(SHARED_EXT) $(BUILD_DIR)/external_code_generator.o $(BUILD_DIR)/external_code_extern_bitcode_32.cpp $(BUILD_DIR)/external_code_extern_bitcode_64.cpp $(BUILD_DIR)/external_code_extern_cpp_source.cpp
+$(BIN_DIR)/external_code.generator: $(BUILD_DIR)/GenGen.o $(BIN_DIR)/libHalide.$(SHARED_EXT) $(BUILD_DIR)/external_code_generator.$(SHARED_EXT) $(BUILD_DIR)/external_code_extern_bitcode_32.cpp $(BUILD_DIR)/external_code_extern_bitcode_64.cpp $(BUILD_DIR)/external_code_extern_cpp_source.cpp
 	@mkdir -p $(@D)
-	$(CXX) $(filter %.cpp %.o %.a,$^) $(TEST_LD_FLAGS) -o $@
+	$(CXX) $^ $(TEST_LD_FLAGS) -o $@
 
 NAME_MANGLING_TARGET=$(NON_EMPTY_TARGET)-c_plus_plus_name_mangling
 
@@ -1158,8 +1158,8 @@ endif
 $(BIN_DIR)/$(TARGET)/generator_aotcpp_cxx_mangling: $(FILTERS_DIR)/cxx_mangling_externs.o
 $(BIN_DIR)/$(TARGET)/generator_aotcpp_cxx_mangling_define_extern: $(FILTERS_DIR)/cxx_mangling.cpp $(FILTERS_DIR)/cxx_mangling_externs.o $(FILTERS_DIR)/cxx_mangling_define_extern_externs.o
 
-$(BUILD_DIR)/stubuser_generator.o: $(FILTERS_DIR)/stubtest.stub.h
-$(BIN_DIR)/stubuser.generator: $(BUILD_DIR)/stubtest_generator.o
+$(BUILD_DIR)/stubuser_generator.$(SHARED_EXT): $(FILTERS_DIR)/stubtest.stub.h
+$(BIN_DIR)/stubuser.generator: $(BUILD_DIR)/stubtest_generator.$(SHARED_EXT)
 
 # stubtest has input and output funcs with undefined types and array sizes; this is fine for stub
 # usage (the types can be inferred), but for AOT compilation, we must make the types
@@ -1262,9 +1262,9 @@ $(BIN_DIR)/$(TARGET)/generator_aotcpp_define_extern_opencl: $(ROOT_DIR)/test/gen
 	$(CXX) $(GEN_AOT_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) $(GEN_AOT_INCLUDES) $(GEN_AOT_LD_FLAGS) $(OPENCL_LD_FLAGS) -o $@
 
 # By default, %_jittest.cpp depends on libHalide, plus the stubs for the Generator. These are external tests that use the JIT.
-$(BIN_DIR)/generator_jit_%: $(ROOT_DIR)/test/generator/%_jittest.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $(FILTERS_DIR)/%.stub.h $(BUILD_DIR)/%_generator.o
+$(BIN_DIR)/generator_jit_%: $(ROOT_DIR)/test/generator/%_jittest.cpp $(BIN_DIR)/libHalide.$(SHARED_EXT) $(INCLUDE_DIR)/Halide.h $(FILTERS_DIR)/%.stub.h $(BUILD_DIR)/%_generator.$(SHARED_EXT)
 	@mkdir -p $(@D)
-	$(CXX) -g $(TEST_CXX_FLAGS) $(filter %.cpp %.o %.a,$^) -I$(INCLUDE_DIR) -I$(FILTERS_DIR) -I $(ROOT_DIR)/apps/support $(TEST_LD_FLAGS) -o $@
+	$(CXX) -g $(TEST_CXX_FLAGS) $(filter %.cpp %.o %.a %.$(SHARED_EXT),$^) -I$(INCLUDE_DIR) -I$(FILTERS_DIR) -I $(ROOT_DIR)/apps/support $(TEST_LD_FLAGS) -o $@
 
 # generator_aot_multitarget is run multiple times, with different env vars.
 generator_aot_multitarget: $(BIN_DIR)/$(TARGET)/generator_aot_multitarget

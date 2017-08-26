@@ -203,35 +203,26 @@ function(halide_add_generator NAME)
   set(multiValueArgs SRCS STUB_DEPS)
   cmake_parse_arguments(args "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
-  # We need to generate an "object" library for every generator, so that any
-  # generator that depends on our stub can link in our generator as well. 
-  # Unfortunately, an ordinary static library won't do: CMake has no way to
-  # force "alwayslink=1", and a static library with just a self-registering
-  # Generator is almost certain to get optimized away at link time. Using
-  # an "Object Library" lets us dodge this (it basically just groups .o files
-  # together and presents them at the end), at the cost of some decidedly
-  # ugly bits right here.
-  set(OBJLIB "${NAME}.objlib")
-  add_library("${OBJLIB}" OBJECT ${args_SRCS})
-  add_dependencies("${OBJLIB}" Halide)
-  target_include_directories("${OBJLIB}" PRIVATE "${CMAKE_BINARY_DIR}/include")
+  set(GENLIB "${NAME}_library")
+  add_library("${GENLIB}" SHARED ${args_SRCS})
+  target_link_libraries("${GENLIB}" PRIVATE Halide)
+
+  target_include_directories("${GENLIB}" PRIVATE "${CMAKE_BINARY_DIR}/include")
   if (NOT MSVC)
-    target_compile_options("${OBJLIB}" PRIVATE "-std=c++11") # Halide clients need C++11
-    target_compile_options("${OBJLIB}" PRIVATE "-fno-rtti")
+    target_compile_options("${GENLIB}" PRIVATE "-std=c++11") # Halide clients need C++11
+    target_compile_options("${GENLIB}" PRIVATE "-fno-rtti")
   endif()
   foreach(STUB ${args_STUB_DEPS})
-    halide_add_generator_stub_dependency(TARGET ${OBJLIB} STUB_GENERATOR_TARGET ${STUB})
-  endforeach()
-
-  set(ALLSTUBS $<TARGET_OBJECTS:${OBJLIB}>)
-  foreach(STUB ${args_STUB_DEPS})
-    list(APPEND ALLSTUBS $<TARGET_OBJECTS:${STUB}.objlib>)
+    halide_add_generator_stub_dependency(TARGET ${GENLIB} STUB_GENERATOR_TARGET ${STUB})
   endforeach()
 
   halide_project("${NAME}" 
                  "generator" 
-                 "${CMAKE_SOURCE_DIR}/tools/GenGen.cpp"
-                 ${ALLSTUBS})
+                 "${CMAKE_SOURCE_DIR}/tools/GenGen.cpp")
+  target_link_libraries("${NAME}" PRIVATE "${GENLIB}")
+  foreach(STUB ${args_STUB_DEPS})
+    target_link_libraries("${NAME}" PRIVATE "${STUB}_library")
+  endforeach()
 
   # Declare a stub library if requested.
   if (${args_WITH_STUB})
