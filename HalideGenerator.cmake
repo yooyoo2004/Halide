@@ -173,7 +173,6 @@ function(_halide_generator_add_exec_generator_target EXEC_TARGET)
 endfunction()
 
 function(halide_generator NAME)
-# TODO DEPS other than stubs
   set(oneValueArgs GENERATOR_NAME)
   set(multiValueArgs SRCS DEPS INCLUDES)
   cmake_parse_arguments(args "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
@@ -202,9 +201,10 @@ function(halide_generator NAME)
   # Don't create empty object-library: that can cause quiet failures in MSVC builds.
   if("${SRCSLEN}" GREATER 0)
     set(GENLIB "${NAME}_library")
-    add_library("${GENLIB}" STATIC ${args_SRCS})
+    add_library("${GENLIB}" SHARED ${args_SRCS})
     # Ensure that Halide.h is built prior to any Generator
     add_dependencies("${GENLIB}" ${HALIDE_COMPILER_LIB})
+    target_link_libraries("${GENLIB}" ${HALIDE_COMPILER_LIB})
     target_include_directories("${GENLIB}" PRIVATE 
                                "${args_INCLUDES}"
                                "${HALIDE_INCLUDE_DIR}" 
@@ -216,21 +216,24 @@ function(halide_generator NAME)
                                  $<TARGET_PROPERTY:${DEP},INTERFACE_INCLUDE_DIRECTORIES>)
     endforeach()
 
-    # We need to ensure that the libraries are linked in with --whole-archive
-    # (or the equivalent), to ensure that the Generator-registration code
-    # isn't omitted. Sadly, there's no portable way to do this, so we do some
-    # special-casing here:
-    if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-      target_link_libraries("${NAME}_binary" PRIVATE "${GENLIB}")
-      set_target_properties("${NAME}_binary" PROPERTIES LINK_FLAGS -Wl,-all_load)
-    elseif(MSVC)
-      # Note that this requires VS2015 R2+
-      target_link_libraries("${NAME}_binary" PRIVATE "${GENLIB}")
-      set_target_properties("${NAME}_binary" PROPERTIES LINK_FLAGS "/WHOLEARCHIVE:${GENLIB}.lib")
-    else()
-      # Assume Linux or similar
-      target_link_libraries("${NAME}_binary" PRIVATE -Wl,--whole-archive "${GENLIB}" -Wl,-no-whole-archive)
-    endif()
+# TODO works well for AOT, not at all for jit-with-stubs. Shared libs better for that
+# We need to ensure that the libraries are linked in with --whole-archive
+# (or the equivalent), to ensure that the Generator-registration code
+# isn't omitted. Sadly, there's no portable way to do this, so we do some
+# special-casing here:
+# if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+#   target_link_libraries("${NAME}_binary" PRIVATE "${GENLIB}")
+#   set_target_properties("${NAME}_binary" PROPERTIES LINK_FLAGS -Wl,-all_load)
+# elseif(MSVC)
+#   # Note that this requires VS2015 R2+
+#   target_link_libraries("${NAME}_binary" PRIVATE "${GENLIB}")
+#   set_target_properties("${NAME}_binary" PROPERTIES LINK_FLAGS "/WHOLEARCHIVE:${GENLIB}.lib")
+# else()
+#   # Assume Linux or similar
+#   target_link_libraries("${NAME}_binary" PRIVATE -Wl,--whole-archive "${GENLIB}" -Wl,-no-whole-archive)
+# endif()
+    
+    target_link_libraries("${NAME}_binary" PRIVATE "${GENLIB}")
   endif()
 
   _halide_generator_genfiles_dir(${BASENAME} GENFILES_DIR)

@@ -197,6 +197,7 @@ foreach (build_config Debug Release RelWithDebInfo MinSizeRel)
   endforeach()
 endforeach()
 
+add_subdirectory(tools)
 add_subdirectory(src)
 option(WITH_TESTS "Build tests" ON)
 if (WITH_TESTS)
