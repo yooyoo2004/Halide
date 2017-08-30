@@ -210,6 +210,9 @@ if (WITH_TEST_GENERATORS)
   halide_define_aot_test(memory_profiler_mandelbrot)
   halide_define_aot_test(stubuser)
   halide_define_aot_test(variable_num_threads)
+  halide_define_aot_test(old_buffer_t)
+  halide_define_aot_test(output_assign)
+  halide_define_aot_test(external_code)
 
   # Tests that require nonstandard targets, namespaces, args, etc.
   halide_define_aot_test(matlab
@@ -314,6 +317,4 @@ if (WITH_TEST_GENERATORS)
     halide_library_from_generator(nested_externs_${G})
     target_link_libraries(generator_aot_nested_externs PRIVATE nested_externs_${G})
   endforeach()
-
-  halide_define_aot_test(external_code)
 endif()
