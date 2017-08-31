@@ -204,6 +204,7 @@ function(halide_generator NAME)
     add_library("${GENLIB}" SHARED ${args_SRCS})
     # Ensure that Halide.h is built prior to any Generator
     add_dependencies("${GENLIB}" ${HALIDE_COMPILER_LIB})
+    target_compile_definitions("${GENLIB}" PRIVATE "-DHalide_${HALIDE_LIBRARY_TYPE}")
     target_link_libraries("${GENLIB}" ${HALIDE_COMPILER_LIB})
     target_include_directories("${GENLIB}" PRIVATE 
                                "${args_INCLUDES}"
@@ -216,23 +217,6 @@ function(halide_generator NAME)
                                  $<TARGET_PROPERTY:${DEP},INTERFACE_INCLUDE_DIRECTORIES>)
     endforeach()
 
-# TODO works well for AOT, not at all for jit-with-stubs. Shared libs better for that
-# We need to ensure that the libraries are linked in with --whole-archive
-# (or the equivalent), to ensure that the Generator-registration code
-# isn't omitted. Sadly, there's no portable way to do this, so we do some
-# special-casing here:
-# if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-#   target_link_libraries("${NAME}_binary" PRIVATE "${GENLIB}")
-#   set_target_properties("${NAME}_binary" PROPERTIES LINK_FLAGS -Wl,-all_load)
-# elseif(MSVC)
-#   # Note that this requires VS2015 R2+
-#   target_link_libraries("${NAME}_binary" PRIVATE "${GENLIB}")
-#   set_target_properties("${NAME}_binary" PROPERTIES LINK_FLAGS "/WHOLEARCHIVE:${GENLIB}.lib")
-# else()
-#   # Assume Linux or similar
-#   target_link_libraries("${NAME}_binary" PRIVATE -Wl,--whole-archive "${GENLIB}" -Wl,-no-whole-archive)
-# endif()
-    
     target_link_libraries("${NAME}_binary" PRIVATE "${GENLIB}")
   endif()
 
@@ -426,4 +410,3 @@ function(halide_add_aot_cpp_dependency TARGET AOT_LIBRARY_TARGET)
   target_link_libraries("${TARGET}" PRIVATE ${AOT_LIBRARY_TARGET}.cpplib)
   target_include_directories("${TARGET}" PRIVATE "${GENFILES_DIR}")
 endfunction(halide_add_aot_cpp_dependency)
-
