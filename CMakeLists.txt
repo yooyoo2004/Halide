@@ -162,6 +162,16 @@ else()
   endif()
 endif()
 
+# These tools are needed by several subdirectories
+add_executable(build_halide_h tools/build_halide_h.cpp)
+add_executable(binary2cpp tools/binary2cpp.cpp)
+if (MSVC)
+  # disable irrelevant "POSIX name" warnings
+  target_compile_options(build_halide_h PUBLIC /wd4996)
+  target_compile_options(binary2cpp PUBLIC /wd4996)
+endif()
+
+
 # Look for OpenMP
 find_package(OpenMP QUIET)
 if (OPENMP_FOUND)
@@ -205,7 +215,6 @@ foreach (build_config Debug Release RelWithDebInfo MinSizeRel)
 endforeach()
 
 add_subdirectory(src)
-add_subdirectory(tools)
 option(WITH_TESTS "Build tests" ON)
 if (WITH_TESTS)
   message(STATUS "Building tests enabled")

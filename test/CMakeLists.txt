@@ -170,6 +170,7 @@ if (WITH_TEST_GENERATORS)
   # Find all the files of form "foo_aottest.cpp" in test/generator
   # and declare a rule for them, each of which depends on foo.generator.
   # Note that there are many special cases.
+  # TODO(srj)
   # file(GLOB JITTEST_SRCS RELATIVE "${GEN_TEST_DIR}" "${GEN_TEST_DIR}/*_aottest.cpp")
   # foreach(FILE ${JITTEST_SRCS})
   #   string(REPLACE "_aottest.cpp" "" NAME "${FILE}")

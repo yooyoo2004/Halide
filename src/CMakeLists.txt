@@ -524,6 +524,11 @@ add_library(Halide ${HALIDE_LIBRARY_TYPE}
 )
 # Define Halide_SHARED or Halide_STATIC depending on library type
 target_compile_definitions(Halide PRIVATE "-DHalide_${HALIDE_LIBRARY_TYPE}")
+# Ensure that these tools are build first
+add_dependencies(Halide
+  binary2cpp
+  build_halide_h
+)
 
 if (WIN32 AND NOT MSVC)
   set_target_properties(Halide PROPERTIES LINK_FLAGS "-Wl,--export-all-symbols")
@@ -642,8 +647,3 @@ if (NOT MSVC)
   string(REPLACE " " "" EXTRA_LIBS "${EXTRA_LIBS}")
   target_link_libraries(Halide PUBLIC ${EXTRA_LIBS})
 endif()
-
-add_dependencies(Halide
-  binary2cpp
-  build_halide_h
-)
