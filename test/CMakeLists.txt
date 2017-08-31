@@ -296,7 +296,6 @@ if (WITH_TEST_GENERATORS)
                          GENERATOR_ARGS "${MDTEST_GEN_ARGS}")
   halide_library_from_generator(metadata_tester_ucon
                                 GENERATOR metadata_tester.generator
-                                FUNCTION_NAME metadata_tester_ucon
                                 GENERATOR_HALIDE_TARGET host-user_context
                                 GENERATOR_ARGS "${MDTEST_GEN_ARGS}")
   target_link_libraries(generator_aot_metadata_tester PUBLIC metadata_tester_ucon)

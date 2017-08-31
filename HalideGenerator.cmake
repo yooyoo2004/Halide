@@ -98,7 +98,7 @@ endfunction()
 function(halide_library_from_generator BASENAME)
   set(options )
   set(oneValueArgs GENERATOR FUNCTION_NAME GENERATOR_HALIDE_TARGET)
-  set(multiValueArgs GENERATOR_ARGS GENERATOR_OUTPUTS FILTER_DEPS)
+  set(multiValueArgs GENERATOR_ARGS EXTRA_OUTPUTS FILTER_DEPS)
   cmake_parse_arguments(args "" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
   if ("${args_GENERATOR}" STREQUAL "")
@@ -110,26 +110,36 @@ function(halide_library_from_generator BASENAME)
   if ("${args_GENERATOR_HALIDE_TARGET}" STREQUAL "")
     set(args_GENERATOR_HALIDE_TARGET "host")
   endif()
-  if ("${args_GENERATOR_OUTPUTS}" STREQUAL "")
-    set(args_GENERATOR_OUTPUTS "static_library;h")
-  endif()
-  # It's fine for GENERATOR_ARGS and FILTER_DEPS to be empty
+  # It's fine for EXTRA_OUTPUTS, GENERATOR_ARGS, FILTER_DEPS to be empty
+
+  # TODO: we could be more efficient by only emitting the generated .cpp
+  # file if something actually depends on it.
+  set(OUTPUTS static_library h cpp)
+  foreach(E ${args_EXTRA_OUTPUTS})
+    if("${E}" STREQUAL "cpp")
+      message(FATAL_ERROR "halide_library('${BASENAME}') doesn't support 'cpp' in EXTRA_OUTPUTS; please depend on '${BASENAME}_cc' instead.")
+    endif()
+    if("${E}" STREQUAL "cpp_stub")
+      message(FATAL_ERROR "halide_library('${BASENAME}') doesn't support 'cpp_stub' in EXTRA_OUTPUTS; please depend on '${BASENAME}.generator' instead.")
+    endif()
+    list(FIND OUTPUTS ${E} index)
+    if (${index} GREATER -1)
+      message(FATAL_ERROR "Duplicate entry ${E} in extra_outputs.")
+    endif()
+    list(APPEND OUTPUTS ${E})
+  endforeach()
 
   get_property(GENERATOR_NAME TARGET "${args_GENERATOR}_stub_gen" PROPERTY _HALIDE_GENERATOR_NAME)
 
   # Create a directory to contain generator specific intermediate files
   _halide_genfiles_dir(${BASENAME} GENFILES_DIR)
 
-  # Determine the name of the output files
-  set(FILTER_LIB "${BASENAME}${CMAKE_STATIC_LIBRARY_SUFFIX}")
-  set(FILTER_HDR "${BASENAME}.h")
-  set(FILTER_CPP "${BASENAME}.cpp")
-
   set(GENERATOR_EXEC_ARGS "-o" "${GENFILES_DIR}")
   list(APPEND GENERATOR_EXEC_ARGS "-g" "${GENERATOR_NAME}")
   list(APPEND GENERATOR_EXEC_ARGS "-f" "${args_FUNCTION_NAME}" )
-  string(REPLACE ";" "," _tmp "${args_GENERATOR_OUTPUTS}")
-  list(APPEND GENERATOR_EXEC_ARGS "-e" ${_tmp})
+  string(REPLACE ";" "," OUTPUTS_COMMA "${OUTPUTS}")
+  list(APPEND GENERATOR_EXEC_ARGS "-e" ${OUTPUTS_COMMA})
+  list(APPEND GENERATOR_EXEC_ARGS "-x" ".s=.s.txt,.cpp=.generated.cpp")
   # Select the runtime to use *before* adding no_runtime
   _halide_library_runtime("${args_GENERATOR_HALIDE_TARGET}" RUNTIME_NAME)
   _halide_add_target_features("${args_GENERATOR_HALIDE_TARGET}" "no_runtime" args_GENERATOR_HALIDE_TARGET)
@@ -137,55 +147,66 @@ function(halide_library_from_generator BASENAME)
   # GENERATOR_ARGS always come last
   list(APPEND GENERATOR_EXEC_ARGS ${args_GENERATOR_ARGS})
 
-  # This is the CMake idiom for "if foo in list"
-  list(FIND args_GENERATOR_OUTPUTS "static_library" _lib_index)
-  list(FIND args_GENERATOR_OUTPUTS "h" _h_index)
-  list(FIND args_GENERATOR_OUTPUTS "cpp" _cpp_index)
-
-  set(OUTPUTS )
-  if (${_lib_index} GREATER -1)
-    list(APPEND OUTPUTS "${GENFILES_DIR}/${FILTER_LIB}")
-  endif()
-  if (${_h_index} GREATER -1)
-    list(APPEND OUTPUTS "${GENFILES_DIR}/${FILTER_HDR}")
-  endif()
-  if (${_cpp_index} GREATER -1)
-    list(APPEND OUTPUTS "${GENFILES_DIR}/${FILTER_CPP}")
-  endif()
+  # CMake has no map type, and no switch statement. Whee!
+  set(OUTPUT_FILES )
+  foreach(OUTPUT ${OUTPUTS})
+    if ("${OUTPUT}" STREQUAL "static_library")
+      list(APPEND OUTPUT_FILES "${GENFILES_DIR}/${BASENAME}${CMAKE_STATIC_LIBRARY_SUFFIX}")
+    elseif ("${OUTPUT}" STREQUAL "o")
+      list(APPEND OUTPUT_FILES "${GENFILES_DIR}/${BASENAME}.o")
+    elseif ("${OUTPUT}" STREQUAL "h")
+      list(APPEND OUTPUT_FILES "${GENFILES_DIR}/${BASENAME}.h")
+    elseif ("${OUTPUT}" STREQUAL "cpp_stub")
+      list(APPEND OUTPUT_FILES "${GENFILES_DIR}/${BASENAME}.stub.h")
+    elseif ("${OUTPUT}" STREQUAL "assembly")
+      list(APPEND OUTPUT_FILES "${GENFILES_DIR}/${BASENAME}.s.txt")
+    elseif ("${OUTPUT}" STREQUAL "bitcode")
+      list(APPEND OUTPUT_FILES "${GENFILES_DIR}/${BASENAME}.bc")
+    elseif ("${OUTPUT}" STREQUAL "stmt")
+      list(APPEND OUTPUT_FILES "${GENFILES_DIR}/${BASENAME}.stmt")
+    elseif ("${OUTPUT}" STREQUAL "html")
+      list(APPEND OUTPUT_FILES "${GENFILES_DIR}/${BASENAME}.html")
+    elseif ("${OUTPUT}" STREQUAL "cpp")
+      list(APPEND OUTPUT_FILES "${GENFILES_DIR}/${BASENAME}.generated.cpp")
+    endif()
+  endforeach()
 
   _halide_add_exec_generator_target(
     "${BASENAME}_lib_gen"
     GENERATOR_BINARY "${args_GENERATOR}_binary"
     GENERATOR_ARGS   "${GENERATOR_EXEC_ARGS}"
-    OUTPUTS          ${OUTPUTS}
+    OUTPUTS          ${OUTPUT_FILES}
   )
 
   add_library("${BASENAME}" INTERFACE)
-  add_dependencies("${BASENAME}" "${BASENAME}_lib_gen")
-  if (${_h_index} GREATER -1)
-    set_target_properties("${BASENAME}" PROPERTIES INTERFACE_INCLUDE_DIRECTORIES ${GENFILES_DIR})
-  endif()
-  if (${_lib_index} GREATER -1)
-    add_dependencies("${BASENAME}" "${RUNTIME_NAME}")
-    set_target_properties("${BASENAME}" PROPERTIES 
-      INTERFACE_LINK_LIBRARIES "${GENFILES_DIR}/${FILTER_LIB};${RUNTIME_NAME};${args_FILTER_DEPS};${CMAKE_DL_LIBS};${CMAKE_THREAD_LIBS_INIT}")
-  endif()
+  add_dependencies("${BASENAME}" "${BASENAME}_lib_gen" "${RUNTIME_NAME}")
+  set_target_properties("${BASENAME}" PROPERTIES 
+      INTERFACE_INCLUDE_DIRECTORIES ${GENFILES_DIR}
+      INTERFACE_LINK_LIBRARIES "${GENFILES_DIR}/${BASENAME}${CMAKE_STATIC_LIBRARY_SUFFIX};${RUNTIME_NAME};${args_FILTER_DEPS};${CMAKE_DL_LIBS};${CMAKE_THREAD_LIBS_INIT}")
 
-  # Code to build the RunGen target(s)
-  if(NOT TARGET _halide_library_from_generator_rungen)
-    add_library(_halide_library_from_generator_rungen "${HALIDE_TOOLS_DIR}/RunGen.cpp")
-    target_include_directories(_halide_library_from_generator_rungen PRIVATE "${HALIDE_INCLUDE_DIR}")
-    halide_use_image_io(_halide_library_from_generator_rungen)
-    _halide_set_cxx_options(_halide_library_from_generator_rungen)
-  endif()
+  add_library("${BASENAME}_cc_lib" STATIC "${GENFILES_DIR}/${BASENAME}.generated.cpp")
+  target_include_directories("${BASENAME}_cc_lib" PRIVATE "${HALIDE_INCLUDE_DIR}")
+  add_dependencies("${BASENAME}_cc_lib" "${BASENAME}_lib_gen")
+  # Very few of the cc_libs are needed, so exclude from "all".
+  set_target_properties("${BASENAME}_cc_lib" PROPERTIES EXCLUDE_FROM_ALL TRUE)
+
+  add_library("${BASENAME}_cc" INTERFACE)
+  add_dependencies("${BASENAME}_cc" "${BASENAME}_cc_lib")
+  set_target_properties("${BASENAME}_cc" PROPERTIES 
+      INTERFACE_INCLUDE_DIRECTORIES ${GENFILES_DIR}
+      INTERFACE_LINK_LIBRARIES "${BASENAME}_cc_lib;${args_FILTER_DEPS}")
+
+  # Code to build the BASENAME.rungen target
   set(RUNGEN "${BASENAME}.rungen")
   add_executable("${RUNGEN}" "${HALIDE_TOOLS_DIR}/RunGenStubs.cpp")
   target_compile_definitions("${RUNGEN}" PRIVATE "-DHL_RUNGEN_FILTER_HEADER=\"${BASENAME}.h\"")
   target_link_libraries("${RUNGEN}" PRIVATE _halide_library_from_generator_rungen "${BASENAME}")
   # Not all Generators will build properly with RunGen (e.g., missing
   # external dependencies), so exclude them from the "ALL" targets
-  # TODO: ensure that all do then remove this
+  # TODO: ensure that all do, then remove this
   set_target_properties("${RUNGEN}" PROPERTIES EXCLUDE_FROM_ALL TRUE)
+
+  # BASENAME.run simply runs the BASENAME.rungen target
   add_custom_target("${BASENAME}.run" 
                     COMMAND "${RUNGEN}" "$(RUNARGS)"
                     DEPENDS "${RUNGEN}")
@@ -196,7 +217,7 @@ endfunction()
 # halide_generator() + halide_library_from_generator().
 function(halide_library NAME)
   set(oneValueArgs GENERATOR_NAME FUNCTION_NAME GENERATOR_HALIDE_TARGET)
-  set(multiValueArgs SRCS GENERATOR_DEPS FILTER_DEPS INCLUDES GENERATOR_ARGS GENERATOR_OUTPUTS)
+  set(multiValueArgs SRCS GENERATOR_DEPS FILTER_DEPS INCLUDES GENERATOR_ARGS EXTRA_OUTPUTS)
   cmake_parse_arguments(args "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
   halide_generator("${NAME}.generator"
@@ -211,15 +232,7 @@ function(halide_library NAME)
                    FUNCTION_NAME ${args_FUNCTION_NAME}
                    GENERATOR_HALIDE_TARGET ${args_GENERATOR_HALIDE_TARGET}
                    GENERATOR_ARGS ${args_GENERATOR_ARGS}
-                   GENERATOR_OUTPUTS ${args_GENERATOR_OUTPUTS})
-endfunction()
-
-function(halide_add_aot_cpp_dependency TARGET AOT_LIBRARY_TARGET)
-  _halide_genfiles_dir(${AOT_LIBRARY_TARGET} GENFILES_DIR)
-
-  add_library(${AOT_LIBRARY_TARGET}.cpplib STATIC "${GENFILES_DIR}/${AOT_LIBRARY_TARGET}.cpp")
-  target_link_libraries("${TARGET}" PRIVATE ${AOT_LIBRARY_TARGET}.cpplib)
-  target_include_directories("${TARGET}" PRIVATE "${GENFILES_DIR}")
+                   EXTRA_OUTPUTS ${args_EXTRA_OUTPUTS})
 endfunction()
 
 # ----------------------- Private Functions. 
@@ -419,3 +432,10 @@ endif()
 define_property(TARGET PROPERTY _HALIDE_GENERATOR_NAME
                 BRIEF_DOCS "Internal use by Halide build rules: do not use externally"
                 FULL_DOCS "Internal use by Halide build rules: do not use externally")
+
+add_library(_halide_library_from_generator_rungen "${HALIDE_TOOLS_DIR}/RunGen.cpp")
+target_include_directories(_halide_library_from_generator_rungen PRIVATE "${HALIDE_INCLUDE_DIR}")
+halide_use_image_io(_halide_library_from_generator_rungen)
+_halide_set_cxx_options(_halide_library_from_generator_rungen)
+set_target_properties(_halide_library_from_generator_rungen PROPERTIES EXCLUDE_FROM_ALL TRUE)
+
