@@ -261,22 +261,6 @@ function(add_to_group GROUP TARGET)
   add_dependencies("${GROUP}" "${NAME}")
 endfunction()
 
-if(WITH_TESTS)
-  add_to_group(run_tests test_internal BUILD)
-  add_to_group(run_tests test_correctness BUILD)
-  add_to_group(run_tests test_error BUILD)
-  add_to_group(run_tests test_warning BUILD)
-  add_to_group(run_tests test_generators BUILD)
-endif()
-if(WITH_TUTORIALS)
-  add_to_group(run_tests test_tutorials BUILD)
-endif()
-
-# TODO(srj): these need to be run one-at-a-time, without any -j option,
-# otherwise we can get false slowdown failures.
-# add_to_group(run_tests test_performance BUILD)
-# add_to_group(run_tests test_auto_schedule BUILD)
-
 add_subdirectory(src)
 option(WITH_TESTS "Build tests" ON)
 if (WITH_TESTS)
