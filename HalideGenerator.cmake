@@ -114,7 +114,7 @@ function(halide_library_from_generator BASENAME)
 
   # TODO: we could be more efficient by only emitting the generated .cpp
   # file if something actually depends on it.
-  set(OUTPUTS static_library h cpp)
+  set(OUTPUTS static_library h)
   foreach(E ${args_EXTRA_OUTPUTS})
     if("${E}" STREQUAL "cpp")
       message(FATAL_ERROR "halide_library('${BASENAME}') doesn't support 'cpp' in EXTRA_OUTPUTS; please depend on '${BASENAME}_cc' instead.")
@@ -137,8 +137,6 @@ function(halide_library_from_generator BASENAME)
   set(GENERATOR_EXEC_ARGS "-o" "${GENFILES_DIR}")
   list(APPEND GENERATOR_EXEC_ARGS "-g" "${GENERATOR_NAME}")
   list(APPEND GENERATOR_EXEC_ARGS "-f" "${args_FUNCTION_NAME}" )
-  string(REPLACE ";" "," OUTPUTS_COMMA "${OUTPUTS}")
-  list(APPEND GENERATOR_EXEC_ARGS "-e" ${OUTPUTS_COMMA})
   list(APPEND GENERATOR_EXEC_ARGS "-x" ".s=.s.txt,.cpp=.generated.cpp")
   # Select the runtime to use *before* adding no_runtime
   _halide_library_runtime("${args_GENERATOR_HALIDE_TARGET}" RUNTIME_NAME)
@@ -153,11 +151,13 @@ function(halide_library_from_generator BASENAME)
     if ("${OUTPUT}" STREQUAL "static_library")
       list(APPEND OUTPUT_FILES "${GENFILES_DIR}/${BASENAME}${CMAKE_STATIC_LIBRARY_SUFFIX}")
     elseif ("${OUTPUT}" STREQUAL "o")
-      list(APPEND OUTPUT_FILES "${GENFILES_DIR}/${BASENAME}.o")
+      if(MSVC)
+        list(APPEND OUTPUT_FILES "${GENFILES_DIR}/${BASENAME}.obj")
+      else()
+        list(APPEND OUTPUT_FILES "${GENFILES_DIR}/${BASENAME}.o")
+      endif()
     elseif ("${OUTPUT}" STREQUAL "h")
       list(APPEND OUTPUT_FILES "${GENFILES_DIR}/${BASENAME}.h")
-    elseif ("${OUTPUT}" STREQUAL "cpp_stub")
-      list(APPEND OUTPUT_FILES "${GENFILES_DIR}/${BASENAME}.stub.h")
     elseif ("${OUTPUT}" STREQUAL "assembly")
       list(APPEND OUTPUT_FILES "${GENFILES_DIR}/${BASENAME}.s.txt")
     elseif ("${OUTPUT}" STREQUAL "bitcode")
@@ -166,15 +166,18 @@ function(halide_library_from_generator BASENAME)
       list(APPEND OUTPUT_FILES "${GENFILES_DIR}/${BASENAME}.stmt")
     elseif ("${OUTPUT}" STREQUAL "html")
       list(APPEND OUTPUT_FILES "${GENFILES_DIR}/${BASENAME}.html")
-    elseif ("${OUTPUT}" STREQUAL "cpp")
-      list(APPEND OUTPUT_FILES "${GENFILES_DIR}/${BASENAME}.generated.cpp")
+    # elseif ("${OUTPUT}" STREQUAL "cpp")
+    #   list(APPEND OUTPUT_FILES "${GENFILES_DIR}/${BASENAME}.generated.cpp")
     endif()
   endforeach()
 
+  # Output everything (except for the generated .cpp file)
+  string(REPLACE ";" "," OUTPUTS_COMMA "${OUTPUTS}")
+  set(ARGS_WITH_OUTPUTS "-e" ${OUTPUTS_COMMA} ${GENERATOR_EXEC_ARGS})
   _halide_add_exec_generator_target(
     "${BASENAME}_lib_gen"
     GENERATOR_BINARY "${args_GENERATOR}_binary"
-    GENERATOR_ARGS   "${GENERATOR_EXEC_ARGS}"
+    GENERATOR_ARGS   "${ARGS_WITH_OUTPUTS}"
     OUTPUTS          ${OUTPUT_FILES}
   )
 
@@ -184,9 +187,21 @@ function(halide_library_from_generator BASENAME)
       INTERFACE_INCLUDE_DIRECTORIES ${GENFILES_DIR}
       INTERFACE_LINK_LIBRARIES "${GENFILES_DIR}/${BASENAME}${CMAKE_STATIC_LIBRARY_SUFFIX};${RUNTIME_NAME};${args_FILTER_DEPS};${CMAKE_DL_LIBS};${CMAKE_THREAD_LIBS_INIT}")
 
+  # A separate invocation for the generated .cpp file, 
+  # since it's rarely used, and some code will fail at Generation
+  # time at present (e.g. code with predicated loads or stores).
+  set(ARGS_WITH_OUTPUTS "-e" "cpp" ${GENERATOR_EXEC_ARGS})
+  _halide_add_exec_generator_target(
+    "${BASENAME}_cc_gen"
+    GENERATOR_BINARY "${args_GENERATOR}_binary"
+    GENERATOR_ARGS   "${ARGS_WITH_OUTPUTS}"
+    OUTPUTS          "${GENFILES_DIR}/${BASENAME}.generated.cpp"
+  )
+
   add_library("${BASENAME}_cc_lib" STATIC "${GENFILES_DIR}/${BASENAME}.generated.cpp")
   target_include_directories("${BASENAME}_cc_lib" PRIVATE "${HALIDE_INCLUDE_DIR}")
-  add_dependencies("${BASENAME}_cc_lib" "${BASENAME}_lib_gen")
+  # Needs _lib_gen as well, to get the .h file
+  add_dependencies("${BASENAME}_cc_lib" "${BASENAME}_lib_gen" "${BASENAME}_cc_gen")
   # Very few of the cc_libs are needed, so exclude from "all".
   set_target_properties("${BASENAME}_cc_lib" PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
