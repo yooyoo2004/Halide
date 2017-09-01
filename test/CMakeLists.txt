@@ -9,12 +9,9 @@ option(WITH_TEST_AUTO_SCHEDULE "Build auto_schedule tests" ON)
 
 if (WITH_TEST_INTERNAL)
   message(STATUS "Internal tests enabled")
-  halide_project(test_internal internal internal.cpp)
-  # Run internal tests after building
-  add_custom_command(TARGET test_internal
-                     POST_BUILD
-                     COMMAND test_internal
-                     COMMENT "Running internal tests")
+  halide_project(_test_internal internal internal.cpp)
+  add_to_group(build_internal _test_internal BUILD)
+  add_to_group(test_internal _test_internal EXECUTE)
 else()
   message(WARNING "Internal tests disabled")
 endif()
@@ -33,11 +30,24 @@ function(tests folder)
   set(TEST_NAMES "")
   foreach(file ${TESTS})
     string(REPLACE ".cpp" "" name "${file}")
-    # Test links against libHalide
-    halide_project("${folder}_${name}" "${folder}" "${folder}/${file}")
-    list(APPEND TEST_NAMES "${folder}_${name}")
-    target_include_directories("${folder}_${name}" PRIVATE "${CMAKE_SOURCE_DIR}")
-    target_compile_definitions("${folder}_${name}"  PRIVATE "-DLLVM_VERSION=${LLVM_VERSION}")
+
+    set(TARGET "build_${folder}_${name}")
+    halide_project("${TARGET}" "${folder}" "${folder}/${file}")
+    list(APPEND TEST_NAMES "${TARGET}")
+    target_include_directories("${TARGET}" PRIVATE "${CMAKE_SOURCE_DIR}")
+    target_compile_definitions("${TARGET}"  PRIVATE "-DLLVM_VERSION=${LLVM_VERSION}")
+
+    add_to_group(build_tests "${TARGET}" BUILD)
+    if("${folder}" STREQUAL "error")
+      set(EXPECT_FAILURE "${CMAKE_CURRENT_SOURCE_DIR}/common/expect_failure.sh")
+      add_custom_target("${folder}_${name}"
+                        COMMAND "${EXPECT_FAILURE}" "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${TARGET}"
+                        DEPENDS "${TARGET}")
+      add_dependencies("${folder}_${name}" "${TARGET}")
+    else()
+      add_to_group(${folder}_${name} "${TARGET}" EXECUTE)
+    endif()
+    add_to_group(test_${folder} "${folder}_${name}" EXECUTE)
   endforeach()
   set(TEST_NAMES "${TEST_NAMES}" PARENT_SCOPE)
 endfunction(tests)
@@ -47,7 +57,7 @@ if (WITH_TEST_AUTO_SCHEDULE)
 endif()
 if (WITH_TEST_CORRECTNESS)
   tests(correctness)
-  halide_use_image_io(correctness_image_io)
+  halide_use_image_io(build_correctness_image_io)
   test_plain_c_includes()
 endif()
 if (WITH_TEST_ERROR)
@@ -82,6 +92,8 @@ if (WITH_TEST_GENERATORS)
     set(TARGET "generator_aot_${NAME}")
 
     add_executable("${TARGET}" "${GEN_TEST_DIR}/${NAME}_aottest.cpp")
+    add_to_group(build_tests "${TARGET}" BUILD)
+    add_to_group(test_generators "${TARGET}" EXECUTE)
     target_include_directories("${TARGET}" PRIVATE 
                                "${CMAKE_SOURCE_DIR}/tools" 
                                "${CMAKE_SOURCE_DIR}" 
@@ -96,7 +108,6 @@ if (WITH_TEST_GENERATORS)
                              FILTER_DEPS "${args_FILTER_DEPS}")
       target_link_libraries("${TARGET}" PUBLIC "${NAME}")
     endif()
-    run_after_build("generator_aot_${NAME}")
   endfunction(halide_define_aot_test)
 
   # Find all the files of form "foo_generator.cpp" in test/generator
@@ -163,7 +174,8 @@ if (WITH_TEST_GENERATORS)
                    "generator"
                    "${GEN_TEST_DIR}/${FILE}")
     target_link_libraries("generator_jit_${NAME}" PRIVATE "${NAME}.generator")
-    run_after_build("generator_jit_${NAME}")
+    add_to_group(build_tests "generator_jit_${NAME}" BUILD)
+    add_to_group(test_generators "generator_jit_${NAME}" EXECUTE)
   endforeach()
 
   # ------ Generator tests for ahead-of-time mode: ------
@@ -191,7 +203,6 @@ if (WITH_TEST_GENERATORS)
   #                            FILTER_DEPS "${args_FILTER_DEPS}")
   #     target_link_libraries("generator_aot_${NAME}" PUBLIC "${NAME}")
   #   endif()
-  #   run_after_build("generator_aot_${NAME}")
   # endforeach()
 
   # Create tests for ahead of-time-compiled generators. This will produce two
@@ -249,8 +260,22 @@ if (WITH_TEST_GENERATORS)
     target_link_libraries(generator_aot_cxx_mangling PUBLIC cxx_mangling_gpu)
   endif()
 
-  halide_define_aot_test(gpu_object_lifetime
-                         GENERATOR_HALIDE_TARGET host-debug)
+  # gpu_object_lifetime can build with a variety of GPU targets (or none).
+  # TODO: disable for now, as we currently run buildbot/Travis tests on machines
+  # that don't have these available.
+  # if(TARGET_PTX)
+  #   halide_define_aot_test(gpu_object_lifetime
+  #                          GENERATOR_HALIDE_TARGET host-cuda-debug)
+  # elseif(TARGET_OPENCL)
+  #   halide_define_aot_test(gpu_object_lifetime
+  #                          GENERATOR_HALIDE_TARGET host-opencl-debug)
+  # elseif(TARGET_METAL)
+  #   halide_define_aot_test(gpu_object_lifetime
+  #                          GENERATOR_HALIDE_TARGET host-metal-debug)
+  # else()
+    halide_define_aot_test(gpu_object_lifetime
+                           GENERATOR_HALIDE_TARGET host-debug)
+  # endif()
 
   halide_define_aot_test(pyramid
                          GENERATOR_ARGS levels=10)
