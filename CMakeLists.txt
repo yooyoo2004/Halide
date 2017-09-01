@@ -328,3 +328,21 @@ if (WITH_UTILS)
 else()
   message(STATUS "Building utils disabled")
 endif()
+
+# Build the "run_tests" target
+if(WITH_TESTS)
+  add_to_group(run_tests test_internal BUILD)
+  add_to_group(run_tests test_correctness BUILD)
+  add_to_group(run_tests test_error BUILD)
+  add_to_group(run_tests test_warning BUILD)
+  add_to_group(run_tests test_generators BUILD)
+endif()
+if(WITH_TUTORIALS)
+  add_to_group(run_tests test_tutorials BUILD)
+endif()
+
+# TODO(srj): these need to be run one-at-a-time, without any -j option,
+# otherwise we can get false slowdown failures.
+# add_to_group(run_tests test_performance BUILD)
+# add_to_group(run_tests test_auto_schedule BUILD)
+

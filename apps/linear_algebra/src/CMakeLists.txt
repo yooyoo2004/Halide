@@ -1,203 +1,153 @@
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+add_library(halide_blas halide_blas.cpp)
+target_include_directories(halide_blas PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-halide_generator(blas_l1.generator SRCS blas_l1_generators.cpp)
-halide_generator(blas_l2.generator SRCS blas_l2_generators.cpp)
-halide_generator(blas_l3.generator SRCS blas_l3_generators.cpp)
+# Define all our generators
+halide_generator(saxpy.generator SRCS blas_l1_generators.cpp)
+halide_generator(daxpy.generator SRCS blas_l1_generators.cpp)
+halide_generator(sdot.generator SRCS blas_l1_generators.cpp)
+halide_generator(ddot.generator SRCS blas_l1_generators.cpp)
+halide_generator(sasum.generator SRCS blas_l1_generators.cpp)
+halide_generator(dasum.generator SRCS blas_l1_generators.cpp)
 
-add_library(halide_blas
-  halide_blas.cpp
-)
+halide_generator(sgemv.generator SRCS blas_l2_generators.cpp)
+halide_generator(dgemv.generator SRCS blas_l2_generators.cpp)
+halide_generator(sger.generator SRCS blas_l2_generators.cpp)
+halide_generator(dger.generator SRCS blas_l2_generators.cpp)
 
-set(FEATURES no_asserts no_bounds_query)
+halide_generator(sgemm.generator SRCS blas_l3_generators.cpp)
+halide_generator(dgemm.generator SRCS blas_l3_generators.cpp)
 
-halide_library(halide_scopy_impl
-	SRCS blas_l1_generators.cpp
-	GENERATOR_NAME saxpy 
-    HALIDE_TARGET_FEATURES ${FEATURES}
-    GENERATOR_ARGS vectorize=true scale_x=false add_to_y=false
-)
-target_link_libraries(halide_blas PUBLIC halide_scopy_impl)
+# Function to reduce boilerplate
+function(add_halide_blas_library)
+  set(options )
+  set(oneValueArgs TARGET NAME)
+  set(multiValueArgs GENERATOR_ARGS)
+  cmake_parse_arguments(args "" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+  halide_library_from_generator(${args_TARGET}
+      GENERATOR ${args_NAME}.generator
+      HALIDE_TARGET_FEATURES no_asserts no_bounds_query
+      GENERATOR_ARGS ${args_ARGN}
+  )
+  target_link_libraries(halide_blas PUBLIC ${args_TARGET})
+endfunction()
 
-halide_library(halide_dcopy_impl
-	SRCS blas_l1_generators.cpp
-	GENERATOR_NAME daxpy 
-    HALIDE_TARGET_FEATURES ${FEATURES}
-    GENERATOR_ARGS vectorize=true scale_x=false add_to_y=false
-)
-target_link_libraries(halide_blas PUBLIC halide_dcopy_impl)
+# And now all the instantiaons
+add_halide_blas_library(
+    TARGET halide_scopy_impl
+    NAME saxpy
+    GENERATOR_ARGS vectorize=true scale_x=false add_to_y=false)
 
-halide_library(halide_sscal_impl
-	SRCS blas_l1_generators.cpp
-	GENERATOR_NAME saxpy 
-    HALIDE_TARGET_FEATURES ${FEATURES}
-    GENERATOR_ARGS vectorize=true scale_x=true add_to_y=false
-)
-target_link_libraries(halide_blas PUBLIC halide_sscal_impl)
+add_halide_blas_library(
+    TARGET halide_dcopy_impl
+    NAME daxpy
+    GENERATOR_ARGS vectorize=true scale_x=false add_to_y=false)
 
-halide_library(halide_dscal_impl
-	SRCS blas_l1_generators.cpp
-	GENERATOR_NAME daxpy 
-    HALIDE_TARGET_FEATURES ${FEATURES}
-    GENERATOR_ARGS vectorize=true scale_x=true add_to_y=false
-)
-target_link_libraries(halide_blas PUBLIC halide_dscal_impl)
+add_halide_blas_library(
+    TARGET halide_sscal_impl
+    NAME saxpy
+    GENERATOR_ARGS vectorize=true scale_x=true add_to_y=false)
 
-halide_library(halide_saxpy_impl
-	SRCS blas_l1_generators.cpp
-	GENERATOR_NAME saxpy 
-    HALIDE_TARGET_FEATURES ${FEATURES}
-    GENERATOR_ARGS vectorize=true scale_x=true add_to_y=true
-)
-target_link_libraries(halide_blas PUBLIC halide_saxpy_impl)
+add_halide_blas_library(
+    TARGET halide_dscal_impl
+    NAME daxpy
+    GENERATOR_ARGS vectorize=true scale_x=true add_to_y=false)
 
-halide_library(halide_daxpy_impl
-	SRCS blas_l1_generators.cpp
-	GENERATOR_NAME daxpy 
-    HALIDE_TARGET_FEATURES ${FEATURES}
-    GENERATOR_ARGS vectorize=true scale_x=true add_to_y=true
-)
-target_link_libraries(halide_blas PUBLIC halide_daxpy_impl)
+add_halide_blas_library(
+    TARGET halide_saxpy_impl
+    NAME saxpy
+    GENERATOR_ARGS vectorize=true scale_x=true add_to_y=true)
 
-halide_library(halide_sdot
-	SRCS blas_l1_generators.cpp
-	GENERATOR_NAME sdot 
-    HALIDE_TARGET_FEATURES ${FEATURES}
-    GENERATOR_ARGS vectorize=true
-)
-target_link_libraries(halide_blas PUBLIC halide_sdot)
+add_halide_blas_library(
+    TARGET halide_daxpy_impl
+    NAME daxpy
+    GENERATOR_ARGS vectorize=true scale_x=true add_to_y=true)
 
-halide_library(halide_ddot
-	SRCS blas_l1_generators.cpp
-	GENERATOR_NAME ddot 
-    HALIDE_TARGET_FEATURES ${FEATURES}
-    GENERATOR_ARGS vectorize=true
-)
-target_link_libraries(halide_blas PUBLIC halide_ddot)
+add_halide_blas_library(
+    TARGET halide_sdot
+    NAME sdot
+    GENERATOR_ARGS vectorize=true)
 
-halide_library(halide_sasum
-	SRCS blas_l1_generators.cpp
-	GENERATOR_NAME sasum 
-    HALIDE_TARGET_FEATURES ${FEATURES}
-    GENERATOR_ARGS vectorize=true
-)
-target_link_libraries(halide_blas PUBLIC halide_sasum)
+add_halide_blas_library(
+    TARGET halide_ddot
+    NAME ddot
+    GENERATOR_ARGS vectorize=true)
 
-halide_library(halide_dasum
-	SRCS blas_l1_generators.cpp
-	GENERATOR_NAME dasum 
-    HALIDE_TARGET_FEATURES ${FEATURES}
-    GENERATOR_ARGS vectorize=true
-)
-target_link_libraries(halide_blas PUBLIC halide_dasum)
+add_halide_blas_library(
+    TARGET halide_sasum
+    NAME sasum
+    GENERATOR_ARGS vectorize=true)
 
-halide_library(halide_sgemv_notrans
-	SRCS blas_l2_generators.cpp
-	GENERATOR_NAME sgemv 
-    HALIDE_TARGET_FEATURES ${FEATURES}
-    GENERATOR_ARGS parallel=false vectorize=true transpose=false
-)
-target_link_libraries(halide_blas PUBLIC halide_sgemv_notrans)
+add_halide_blas_library(
+    TARGET halide_dasum
+    NAME dasum
+    GENERATOR_ARGS vectorize=true)
 
-halide_library(halide_dgemv_notrans
-	SRCS blas_l2_generators.cpp
-	GENERATOR_NAME dgemv 
-    HALIDE_TARGET_FEATURES ${FEATURES}
-    GENERATOR_ARGS parallel=false vectorize=true transpose=false
-)
-target_link_libraries(halide_blas PUBLIC halide_dgemv_notrans)
+add_halide_blas_library(
+    TARGET halide_sgemv_notrans
+    NAME sgemv
+    GENERATOR_ARGS parallel=false vectorize=true transpose=false)
 
-halide_library(halide_sgemv_trans
-	SRCS blas_l2_generators.cpp
-	GENERATOR_NAME sgemv 
-    HALIDE_TARGET_FEATURES ${FEATURES}
-    GENERATOR_ARGS parallel=false vectorize=true transpose=true
-)
-target_link_libraries(halide_blas PUBLIC halide_sgemv_trans)
+add_halide_blas_library(
+    TARGET halide_dgemv_notrans
+    NAME dgemv
+    GENERATOR_ARGS parallel=false vectorize=true transpose=false)
 
-halide_library(halide_dgemv_trans
-	SRCS blas_l2_generators.cpp
-	GENERATOR_NAME dgemv 
-    HALIDE_TARGET_FEATURES ${FEATURES}
-    GENERATOR_ARGS parallel=false vectorize=true transpose=true
-)
-target_link_libraries(halide_blas PUBLIC halide_dgemv_trans)
+add_halide_blas_library(
+    TARGET halide_sgemv_trans
+    NAME sgemv
+    GENERATOR_ARGS parallel=false vectorize=true transpose=true)
 
-halide_library(halide_sger_impl
-	SRCS blas_l2_generators.cpp
-	GENERATOR_NAME sger 
-    HALIDE_TARGET_FEATURES ${FEATURES}
-    GENERATOR_ARGS parallel=false vectorize=true
-)
-target_link_libraries(halide_blas PUBLIC halide_sger_impl)
+add_halide_blas_library(
+    TARGET halide_dgemv_trans
+    NAME dgemv
+    GENERATOR_ARGS parallel=false vectorize=true transpose=true)
 
-halide_library(halide_dger_impl
-	SRCS blas_l2_generators.cpp
-	GENERATOR_NAME dger 
-    HALIDE_TARGET_FEATURES ${FEATURES}
-    GENERATOR_ARGS parallel=false vectorize=true
-)
-target_link_libraries(halide_blas PUBLIC halide_dger_impl)
+add_halide_blas_library(
+    TARGET halide_sger_impl
+    NAME sger
+    GENERATOR_ARGS parallel=false vectorize=true)
 
-halide_library(halide_sgemm_notrans
-	SRCS blas_l3_generators.cpp
-	GENERATOR_NAME sgemm 
-    HALIDE_TARGET_FEATURES ${FEATURES}
-    GENERATOR_ARGS transpose_A=false transpose_B=false
-)
-target_link_libraries(halide_blas PUBLIC halide_sgemm_notrans)
+add_halide_blas_library(
+    TARGET halide_dger_impl
+    NAME dger
+    GENERATOR_ARGS parallel=false vectorize=true)
 
-halide_library(halide_dgemm_notrans
-	SRCS blas_l3_generators.cpp
-	GENERATOR_NAME dgemm 
-    HALIDE_TARGET_FEATURES ${FEATURES}
-    GENERATOR_ARGS transpose_A=false transpose_B=false
-)
-target_link_libraries(halide_blas PUBLIC halide_dgemm_notrans)
+add_halide_blas_library(
+    TARGET halide_sgemm_notrans
+    NAME sgemm
+    GENERATOR_ARGS transpose_A=false transpose_B=false)
 
-halide_library(halide_sgemm_transA
-	SRCS blas_l3_generators.cpp
-	GENERATOR_NAME sgemm 
-    HALIDE_TARGET_FEATURES ${FEATURES}
-    GENERATOR_ARGS transpose_A=true transpose_B=false
-)
-target_link_libraries(halide_blas PUBLIC halide_sgemm_transA)
+add_halide_blas_library(
+    TARGET halide_dgemm_notrans
+    NAME dgemm
+    GENERATOR_ARGS transpose_A=false transpose_B=false)
 
-halide_library(halide_dgemm_transA
-	SRCS blas_l3_generators.cpp
-	GENERATOR_NAME dgemm 
-    HALIDE_TARGET_FEATURES ${FEATURES}
-    GENERATOR_ARGS transpose_A=true transpose_B=false
-)
-target_link_libraries(halide_blas PUBLIC halide_dgemm_transA)
+add_halide_blas_library(
+    TARGET halide_sgemm_transA
+    NAME sgemm
+    GENERATOR_ARGS transpose_A=true transpose_B=false)
 
-halide_library(halide_sgemm_transB
-	SRCS blas_l3_generators.cpp
-	GENERATOR_NAME sgemm 
-    HALIDE_TARGET_FEATURES ${FEATURES}
-    GENERATOR_ARGS transpose_A=false transpose_B=true
-)
-target_link_libraries(halide_blas PUBLIC halide_sgemm_transB)
+add_halide_blas_library(
+    TARGET halide_dgemm_transA
+    NAME dgemm
+    GENERATOR_ARGS transpose_A=true transpose_B=false)
 
-halide_library(halide_dgemm_transB
-	SRCS blas_l3_generators.cpp
-	GENERATOR_NAME dgemm 
-    HALIDE_TARGET_FEATURES ${FEATURES}
-    GENERATOR_ARGS transpose_A=false transpose_B=true
-)
-target_link_libraries(halide_blas PUBLIC halide_dgemm_transB)
+add_halide_blas_library(
+    TARGET halide_sgemm_transB
+    NAME sgemm
+    GENERATOR_ARGS transpose_A=false transpose_B=true)
 
-halide_library(halide_sgemm_transAB
-	SRCS blas_l3_generators.cpp
-	GENERATOR_NAME sgemm 
-    HALIDE_TARGET_FEATURES ${FEATURES}
-    GENERATOR_ARGS transpose_A=true transpose_B=true
-)
-target_link_libraries(halide_blas PUBLIC halide_sgemm_transAB)
+add_halide_blas_library(
+    TARGET halide_dgemm_transB
+    NAME dgemm
+    GENERATOR_ARGS transpose_A=false transpose_B=true)
 
-halide_library(halide_dgemm_transAB
-	SRCS blas_l3_generators.cpp
-	GENERATOR_NAME dgemm 
-    HALIDE_TARGET_FEATURES ${FEATURES}
-    GENERATOR_ARGS transpose_A=true transpose_B=true
-)
-target_link_libraries(halide_blas PUBLIC halide_dgemm_transAB)
+add_halide_blas_library(
+    TARGET halide_sgemm_transAB
+    NAME sgemm
+    GENERATOR_ARGS transpose_A=true transpose_B=true)
+
+add_halide_blas_library(
+    TARGET halide_dgemm_transAB
+    NAME dgemm
+    GENERATOR_ARGS transpose_A=true transpose_B=true)

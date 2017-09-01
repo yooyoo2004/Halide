@@ -49,8 +49,8 @@ function(halide_generator NAME)
   # at least one source file, and this is the cheapest one we're going to have.
   add_executable("${NAME}_binary" "${HALIDE_TOOLS_DIR}/GenGen.cpp")
   _halide_set_cxx_options("${NAME}_binary")
-  target_link_libraries("${NAME}_binary" PRIVATE ${HALIDE_COMPILER_LIB} ${HALIDE_SYSTEM_LIBS} ${CMAKE_DL_LIBS} ${CMAKE_THREAD_LIBS_INIT})
   target_include_directories("${NAME}_binary" PRIVATE "${HALIDE_TOOLS_DIR}")
+  target_link_libraries("${NAME}_binary" PRIVATE ${HALIDE_COMPILER_LIB} ${HALIDE_SYSTEM_LIBS} ${CMAKE_DL_LIBS} ${CMAKE_THREAD_LIBS_INIT})
   if (MSVC)
     target_link_libraries("${NAME}_binary" PRIVATE Kernel32)
   endif()
@@ -78,7 +78,7 @@ function(halide_generator NAME)
     # special-casing here:
     if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
       target_link_libraries("${NAME}_binary" PRIVATE "${GENLIB}")
-      set_target_properties("${NAME}_binary" PROPERTIES LINK_FLAGS -Wl,-all_load)
+      set_target_properties("${NAME}_binary" PROPERTIES LINK_FLAGS -Wl,-force_load,${CMAKE_BINARY_DIR}/lib/lib${GENLIB}.a)
     elseif(MSVC)
       # Note that this requires VS2015 R2+
       target_link_libraries("${NAME}_binary" PRIVATE "${GENLIB}")
@@ -267,7 +267,6 @@ function(halide_library_from_generator BASENAME)
   target_link_libraries("${RUNGEN}" PRIVATE _halide_library_from_generator_rungen "${BASENAME}")
   # Not all Generators will build properly with RunGen (e.g., missing
   # external dependencies), so exclude them from the "ALL" targets
-  # TODO: ensure that all do, then remove this
   set_target_properties("${RUNGEN}" PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
   # BASENAME.run simply runs the BASENAME.rungen target
@@ -280,9 +279,13 @@ endfunction()
 # Rule to build and use a Generator; it's convenient sugar around 
 # halide_generator() + halide_library_from_generator().
 function(halide_library NAME)
-  set(oneValueArgs FUNCTION_NAME HALIDE_TARGET GENERATOR_NAME)
+  set(oneValueArgs FUNCTION_NAME HALIDE_TARGET GENERATOR GENERATOR_NAME)
   set(multiValueArgs EXTRA_OUTPUTS FILTER_DEPS GENERATOR_DEPS HALIDE_TARGET_FEATURES INCLUDES GENERATOR_ARGS SRCS)
   cmake_parse_arguments(args "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+  if (NOT "${args_GENERATOR}" STREQUAL "")
+    message(FATAL_ERROR "halide_library('${BASENAME}') doesn't take a GENERATOR argument. Did you mean to use GENERATOR_NAME, or the halide_library_from_generator() rule?")
+  endif()
 
   halide_generator("${NAME}.generator"
                    SRCS ${args_SRCS}
