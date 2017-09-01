@@ -42,12 +42,12 @@ function(halide_generator NAME)
     set(args_GENERATOR_NAME "${BASENAME}")
   endif()
 
-  # TODO: precompile GenGen.cpp; does add_executable accept an empty srcs set?
+  # We could precompile GenGen.cpp, but add_executable() requires
+  # at least one source file, and this is the cheapest one we're going to have.
   add_executable("${NAME}_binary" "${HALIDE_TOOLS_DIR}/GenGen.cpp")
   _halide_set_cxx_options("${NAME}_binary")
   target_link_libraries("${NAME}_binary" PRIVATE ${HALIDE_COMPILER_LIB} ${HALIDE_SYSTEM_LIBS} ${CMAKE_DL_LIBS} ${CMAKE_THREAD_LIBS_INIT})
   target_include_directories("${NAME}_binary" PRIVATE "${HALIDE_TOOLS_DIR}")
-  set_target_properties("${NAME}_binary" PROPERTIES FOLDER "generator")
   if (MSVC)
     target_link_libraries("${NAME}_binary" PRIVATE Kernel32)
   endif()
@@ -58,9 +58,9 @@ function(halide_generator NAME)
     set(GENLIB "${NAME}_library")
     # Use Shared Libraries for all Generators to ensure that the RegisterGenerator
     # code is not dead-stripped.
-    add_library("${GENLIB}" SHARED ${args_SRCS})
+    add_library("${GENLIB}" STATIC ${args_SRCS})
     _halide_set_cxx_options("${GENLIB}")
-    target_link_libraries("${GENLIB}" ${HALIDE_COMPILER_LIB} ${HALIDE_SYSTEM_LIBS} ${args_DEPS})
+    target_link_libraries("${GENLIB}" ${args_DEPS})
     target_include_directories("${GENLIB}" PRIVATE "${args_INCLUDES}" "${HALIDE_INCLUDE_DIR}" "${HALIDE_TOOLS_DIR}")
     foreach(DEP ${args_DEPS})
       target_include_directories("${GENLIB}" PRIVATE 
@@ -69,7 +69,21 @@ function(halide_generator NAME)
     # Ensure that Halide.h is built prior to any Generator
     add_dependencies("${GENLIB}" ${HALIDE_COMPILER_LIB})
 
-    target_link_libraries("${NAME}_binary" PRIVATE "${GENLIB}")
+    # We need to ensure that the libraries are linked in with --whole-archive
+    # (or the equivalent), to ensure that the Generator-registration code
+    # isn't omitted. Sadly, there's no portable way to do this, so we do some
+    # special-casing here:
+    if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+      target_link_libraries("${NAME}_binary" PRIVATE "${GENLIB}")
+      set_target_properties("${NAME}_binary" PROPERTIES LINK_FLAGS -Wl,-all_load)
+    elseif(MSVC)
+      # Note that this requires VS2015 R2+
+      target_link_libraries("${NAME}_binary" PRIVATE "${GENLIB}")
+      set_target_properties("${NAME}_binary" PROPERTIES LINK_FLAGS "/WHOLEARCHIVE:${GENLIB}.lib")
+    else()
+      # Assume Linux or similar
+      target_link_libraries("${NAME}_binary" PRIVATE -Wl,--whole-archive "${GENLIB}" -Wl,-no-whole-archive)
+    endif()
   endif()
 
   _halide_genfiles_dir(${BASENAME} GENFILES_DIR)
@@ -401,7 +415,6 @@ function(_halide_add_exec_generator_target EXEC_TARGET)
   cmake_parse_arguments(args "" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
   add_custom_target(${EXEC_TARGET} DEPENDS ${args_OUTPUTS})
-  set_target_properties(${EXEC_TARGET} PROPERTIES FOLDER "generator")
 
   # As of CMake 3.x, add_custom_command() recognizes executable target names in its COMMAND.
   add_custom_command(
@@ -453,4 +466,3 @@ target_include_directories(_halide_library_from_generator_rungen PRIVATE "${HALI
 halide_use_image_io(_halide_library_from_generator_rungen)
 _halide_set_cxx_options(_halide_library_from_generator_rungen)
 set_target_properties(_halide_library_from_generator_rungen PROPERTIES EXCLUDE_FROM_ALL TRUE)
-
