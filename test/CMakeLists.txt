@@ -85,8 +85,8 @@ if (WITH_TEST_GENERATORS)
 
   function(halide_define_aot_test NAME)
     set(options OMIT_DEFAULT_GENERATOR)
-    set(oneValueArgs FUNCTION_NAME GENERATOR_HALIDE_TARGET)
-    set(multiValueArgs GENERATOR_ARGS DEPS FILTER_DEPS)
+    set(oneValueArgs FUNCTION_NAME HALIDE_TARGET)
+    set(multiValueArgs GENERATOR_ARGS DEPS FILTER_DEPS HALIDE_TARGET_FEATURES)
     cmake_parse_arguments(args "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     set(TARGET "generator_aot_${NAME}")
@@ -103,7 +103,8 @@ if (WITH_TEST_GENERATORS)
       halide_library_from_generator("${NAME}"
                              GENERATOR "${NAME}.generator"
                              FUNCTION_NAME "${args_FUNCTION_NAME}"
-                             GENERATOR_HALIDE_TARGET "${args_GENERATOR_HALIDE_TARGET}"
+                             HALIDE_TARGET "${args_HALIDE_TARGET}"
+                             HALIDE_TARGET_FEATURES "${args_HALIDE_TARGET_FEATURES}"
                              GENERATOR_ARGS "${args_GENERATOR_ARGS}"
                              FILTER_DEPS "${args_FILTER_DEPS}")
       target_link_libraries("${TARGET}" PUBLIC "${NAME}")
@@ -198,7 +199,7 @@ if (WITH_TEST_GENERATORS)
   #     halide_library_from_generator("${NAME}"
   #                            GENERATOR "${NAME}.generator"
   #                            FUNCTION_NAME "${args_FUNCTION_NAME}"
-  #                            GENERATOR_HALIDE_TARGET "${args_GENERATOR_HALIDE_TARGET}"
+  #                            HALIDE_TARGET "${args_GENERATOR_HALIDE_TARGET}"
   #                            GENERATOR_ARGS "${args_GENERATOR_ARGS}"
   #                            FILTER_DEPS "${args_FILTER_DEPS}")
   #     target_link_libraries("generator_aot_${NAME}" PUBLIC "${NAME}")
@@ -232,23 +233,24 @@ if (WITH_TEST_GENERATORS)
 
   # Tests that require nonstandard targets, namespaces, args, etc.
   halide_define_aot_test(matlab
-                         GENERATOR_HALIDE_TARGET host-matlab)
+                         HALIDE_TARGET_FEATURES matlab)
 
   halide_define_aot_test(multitarget
-                         GENERATOR_HALIDE_TARGET host-debug-c_plus_plus_name_mangling,host-c_plus_plus_name_mangling
+                         HALIDE_TARGET host,host-debug
+                         HALIDE_TARGET_FEATURES c_plus_plus_name_mangling
                          FUNCTION_NAME HalideTest::multitarget)
 
   halide_define_aot_test(user_context
-                         GENERATOR_HALIDE_TARGET host-user_context)
+                         HALIDE_TARGET_FEATURES user_context)
 
   halide_define_aot_test(user_context_insanity
-                         GENERATOR_HALIDE_TARGET host-user_context)
+                         HALIDE_TARGET_FEATURES user_context)
 
   add_library(cxx_mangling_externs 
               "${GEN_TEST_DIR}/cxx_mangling_externs.cpp")
 
   halide_define_aot_test(cxx_mangling
-                         GENERATOR_HALIDE_TARGET host-c_plus_plus_name_mangling
+                         HALIDE_TARGET_FEATURES c_plus_plus_name_mangling
                          FUNCTION_NAME HalideTest::AnotherNamespace::cxx_mangling
                          FILTER_DEPS cxx_mangling_externs)
 
@@ -256,7 +258,7 @@ if (WITH_TEST_GENERATORS)
     halide_library_from_generator(cxx_mangling_gpu
                                   GENERATOR cxx_mangling.generator
                                   FUNCTION_NAME HalideTest::cxx_mangling_gpu
-                                  GENERATOR_HALIDE_TARGET host-c_plus_plus_name_mangling-cuda)
+                                  HALIDE_TARGET_FEATURES c_plus_plus_name_mangling cuda)
     target_link_libraries(generator_aot_cxx_mangling PUBLIC cxx_mangling_gpu)
   endif()
 
@@ -265,23 +267,23 @@ if (WITH_TEST_GENERATORS)
   # that don't have these available.
   # if(TARGET_PTX)
   #   halide_define_aot_test(gpu_object_lifetime
-  #                          GENERATOR_HALIDE_TARGET host-cuda-debug)
+  #                          HALIDE_TARGET_FEATURES cuda debug)
   # elseif(TARGET_OPENCL)
   #   halide_define_aot_test(gpu_object_lifetime
-  #                          GENERATOR_HALIDE_TARGET host-opencl-debug)
+  #                          HALIDE_TARGET_FEATURES opencl debug)
   # elseif(TARGET_METAL)
   #   halide_define_aot_test(gpu_object_lifetime
-  #                          GENERATOR_HALIDE_TARGET host-metal-debug)
+  #                          HALIDE_TARGET_FEATURES metal debug)
   # else()
     halide_define_aot_test(gpu_object_lifetime
-                           GENERATOR_HALIDE_TARGET host-debug)
+                           HALIDE_TARGET_FEATURES debug)
   # endif()
 
   halide_define_aot_test(pyramid
                          GENERATOR_ARGS levels=10)
 
   halide_define_aot_test(msan
-                         GENERATOR_HALIDE_TARGET host-msan)
+                         HALIDE_TARGET_FEATURES msan)
 
   # stubtest has input and output funcs with undefined types; this is fine for stub
   # usage (the types can be inferred), but for AOT compilation, we must make the types
@@ -321,7 +323,7 @@ if (WITH_TEST_GENERATORS)
                          GENERATOR_ARGS "${MDTEST_GEN_ARGS}")
   halide_library_from_generator(metadata_tester_ucon
                                 GENERATOR metadata_tester.generator
-                                GENERATOR_HALIDE_TARGET host-user_context
+                                HALIDE_TARGET_FEATURES user_context
                                 GENERATOR_ARGS "${MDTEST_GEN_ARGS}")
   target_link_libraries(generator_aot_metadata_tester PUBLIC metadata_tester_ucon)
 
@@ -334,7 +336,7 @@ if (WITH_TEST_GENERATORS)
   target_link_libraries(cxx_mangling_define_extern_externs PUBLIC cxx_mangling_externs cxx_mangling)
 
   halide_define_aot_test(cxx_mangling_define_extern
-                         GENERATOR_HALIDE_TARGET host-c_plus_plus_name_mangling-user_context
+                         HALIDE_TARGET_FEATURES c_plus_plus_name_mangling user_context
                          FUNCTION_NAME HalideTest::cxx_mangling_define_extern
                          FILTER_DEPS cxx_mangling_externs cxx_mangling_define_extern_externs)
   # The cxx_mangling library was already defined implicitly, above,

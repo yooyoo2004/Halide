@@ -5,11 +5,11 @@ if (OpenGL_FOUND)
     # Generators
     halide_library(halide_blur_glsl
                    SRCS halide_blur_glsl_generator.cpp
-                   GENERATOR_HALIDE_TARGET host-opengl-debug)
+                   HALIDE_TARGET_FEATURES opengl debug)
 
     halide_library(halide_ycc_glsl
                    SRCS halide_ycc_glsl_generator.cpp
-                   GENERATOR_HALIDE_TARGET host-opengl-debug)
+                   HALIDE_TARGET_FEATURES opengl debug)
 
     # Final executable
     add_executable(opengl_test opengl_test.cpp)

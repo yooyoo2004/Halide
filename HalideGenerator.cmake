@@ -1,9 +1,5 @@
 include(CMakeParseArguments)
 
-# TODO: halide_target_features vs generator_halide_target
-# TODO: namespace: keep or not?
-
-
 cmake_minimum_required(VERSION 3.1.3)
 
 # ----------------------- Public Functions. 
@@ -115,11 +111,10 @@ function(halide_generator NAME)
 endfunction()
 
 # Use a Generator target to emit a code library.
-# TODO do we want to use halide_target_features instead of GENERATOR_HALIDE_TARGET?
 function(halide_library_from_generator BASENAME)
   set(options )
-  set(oneValueArgs GENERATOR FUNCTION_NAME GENERATOR_HALIDE_TARGET)
-  set(multiValueArgs GENERATOR_ARGS EXTRA_OUTPUTS FILTER_DEPS INCLUDES)
+  set(oneValueArgs FUNCTION_NAME GENERATOR HALIDE_TARGET)
+  set(multiValueArgs EXTRA_OUTPUTS FILTER_DEPS GENERATOR_ARGS HALIDE_TARGET_FEATURES INCLUDES)
   cmake_parse_arguments(args "" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
   if ("${args_GENERATOR}" STREQUAL "")
@@ -128,19 +123,37 @@ function(halide_library_from_generator BASENAME)
   if ("${args_FUNCTION_NAME}" STREQUAL "")
     set(args_FUNCTION_NAME "${BASENAME}")
   endif()
-  if ("${args_GENERATOR_HALIDE_TARGET}" STREQUAL "")
-    set(args_GENERATOR_HALIDE_TARGET "host")
+  if ("${args_HALIDE_TARGET}" STREQUAL "")
+    set(args_HALIDE_TARGET "host")
   endif()
-  # It's fine for EXTRA_OUTPUTS, GENERATOR_ARGS, FILTER_DEPS to be empty
+  # It's fine for EXTRA_OUTPUTS, GENERATOR_ARGS, FILTER_DEPS, HALIDE_TARGET_FEATURES to be empty
 
   # Some sanity checking
-  if("${args_GENERATOR_HALIDE_TARGET}" MATCHES "^target=")
-    message(FATAL_ERROR "GENERATOR_HALIDE_TARGET should not begin with 'target='.")
+  if("${args_HALIDE_TARGET}" MATCHES "^target=")
+    message(FATAL_ERROR "HALIDE_TARGET should not begin with 'target='.")
   endif()
-
+  foreach(FEATURE ${args_HALIDE_TARGET_FEATURES})
+    if("${FEATURE}" STREQUAL "no_runtime")
+      message(FATAL_ERROR "HALIDE_TARGET_FEATURES may not contain 'no_runtime'.")
+    endif()
+    # Note that this list isn't exhaustive, but will check enough of the likely
+    # common cases to enforce proper usage.
+    if("${FEATURE}" STREQUAL "host" OR
+       "${FEATURE}" STREQUAL "x86" OR
+       "${FEATURE}" STREQUAL "arm" OR
+       "${FEATURE}" STREQUAL "32" OR
+       "${FEATURE}" STREQUAL "64" OR
+       "${FEATURE}" STREQUAL "linux" OR
+       "${FEATURE}" STREQUAL "osx" OR
+       "${FEATURE}" STREQUAL "windows" OR
+       "${FEATURE}" STREQUAL "ios" OR
+       "${FEATURE}" STREQUAL "android")
+      message(FATAL_ERROR "HALIDE_TARGET_FEATURES may not the Arch/OS/Bits string '${FEATURE}'; use HALIDE_TARGET instead.")
+    endif()
+  endforeach()
   foreach(ARG ${args_GENERATOR_ARGS})
     if("${ARG}" MATCHES "^target=")
-      message(FATAL_ERROR "GENERATOR_ARGS may not include 'target=whatever'; use GENERATOR_HALIDE_TARGET instead.")
+      message(FATAL_ERROR "GENERATOR_ARGS may not include 'target=whatever'; use HALIDE_TARGET instead.")
     endif()
   endforeach()
 
@@ -164,14 +177,20 @@ function(halide_library_from_generator BASENAME)
   # Create a directory to contain generator specific intermediate files
   _halide_genfiles_dir(${BASENAME} GENFILES_DIR)
 
+  # Append HALIDE_TARGET_FEATURES to the target(s)
+  set(TARGET_WITH_FEATURES "${args_HALIDE_TARGET}")
+  foreach(FEATURE ${args_HALIDE_TARGET_FEATURES})
+    _halide_add_target_features("${TARGET_WITH_FEATURES}" ${FEATURE} TARGET_WITH_FEATURES)
+  endforeach()
+  # Select the runtime to use *before* adding no_runtime
+  _halide_library_runtime("${TARGET_WITH_FEATURES}" RUNTIME_NAME)
+  _halide_add_target_features("${TARGET_WITH_FEATURES}" "no_runtime" TARGET_WITH_FEATURES)
+
   set(GENERATOR_EXEC_ARGS "-o" "${GENFILES_DIR}")
   list(APPEND GENERATOR_EXEC_ARGS "-g" "${GENERATOR_NAME}")
   list(APPEND GENERATOR_EXEC_ARGS "-f" "${args_FUNCTION_NAME}" )
   list(APPEND GENERATOR_EXEC_ARGS "-x" ".s=.s.txt,.cpp=.generated.cpp")
-  # Select the runtime to use *before* adding no_runtime
-  _halide_library_runtime("${args_GENERATOR_HALIDE_TARGET}" RUNTIME_NAME)
-  _halide_add_target_features("${args_GENERATOR_HALIDE_TARGET}" "no_runtime" args_GENERATOR_HALIDE_TARGET)
-  list(APPEND GENERATOR_EXEC_ARGS "target=${args_GENERATOR_HALIDE_TARGET}")
+  list(APPEND GENERATOR_EXEC_ARGS "target=${TARGET_WITH_FEATURES}")
   # GENERATOR_ARGS always come last
   list(APPEND GENERATOR_EXEC_ARGS ${args_GENERATOR_ARGS})
 
@@ -261,8 +280,8 @@ endfunction()
 # Rule to build and use a Generator; it's convenient sugar around 
 # halide_generator() + halide_library_from_generator().
 function(halide_library NAME)
-  set(oneValueArgs GENERATOR_NAME FUNCTION_NAME GENERATOR_HALIDE_TARGET)
-  set(multiValueArgs SRCS GENERATOR_DEPS FILTER_DEPS INCLUDES GENERATOR_ARGS EXTRA_OUTPUTS)
+  set(oneValueArgs FUNCTION_NAME HALIDE_TARGET GENERATOR_NAME)
+  set(multiValueArgs EXTRA_OUTPUTS FILTER_DEPS GENERATOR_DEPS HALIDE_TARGET_FEATURES INCLUDES GENERATOR_ARGS SRCS)
   cmake_parse_arguments(args "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
   halide_generator("${NAME}.generator"
@@ -276,7 +295,8 @@ function(halide_library NAME)
                    INCLUDES ${args_INCLUDES}
                    GENERATOR "${NAME}.generator"
                    FUNCTION_NAME ${args_FUNCTION_NAME}
-                   GENERATOR_HALIDE_TARGET ${args_GENERATOR_HALIDE_TARGET}
+                   HALIDE_TARGET ${args_HALIDE_TARGET}
+                   HALIDE_TARGET_FEATURES ${args_HALIDE_TARGET_FEATURES}
                    GENERATOR_ARGS ${args_GENERATOR_ARGS}
                    EXTRA_OUTPUTS ${args_EXTRA_OUTPUTS})
 endfunction()
@@ -395,21 +415,21 @@ endfunction()
 
 # Generate the runtime library for the given halide_target; return
 # its cmake target name in outvar.
-function(_halide_library_runtime GENERATOR_HALIDE_TARGET OUTVAR)
+function(_halide_library_runtime HALIDE_TARGET OUTVAR)
   if(NOT TARGET halide_library_runtime.generator)
     halide_generator(halide_library_runtime.generator SRCS "")
   endif()
 
-  string(REPLACE "," ";" MULTITARGETS "${GENERATOR_HALIDE_TARGET}")
-  list(GET MULTITARGETS -1 GENERATOR_HALIDE_TARGET)
-  _halide_runtime_target_name("${GENERATOR_HALIDE_TARGET}" RUNTIME_NAME)
+  string(REPLACE "," ";" MULTITARGETS "${HALIDE_TARGET}")
+  list(GET MULTITARGETS -1 HALIDE_TARGET)
+  _halide_runtime_target_name("${HALIDE_TARGET}" RUNTIME_NAME)
   if(NOT TARGET "${RUNTIME_NAME}")
     set(RUNTIME_LIB "${RUNTIME_NAME}${CMAKE_STATIC_LIBRARY_SUFFIX}")
 
     _halide_genfiles_dir(${RUNTIME_NAME} GENFILES_DIR)
     set(GENERATOR_EXEC_ARGS "-o" "${GENFILES_DIR}")
     list(APPEND GENERATOR_EXEC_ARGS "-r" "${RUNTIME_NAME}")
-    list(APPEND GENERATOR_EXEC_ARGS "target=${GENERATOR_HALIDE_TARGET}")
+    list(APPEND GENERATOR_EXEC_ARGS "target=${HALIDE_TARGET}")
 
     _halide_add_exec_generator_target(
       "${RUNTIME_NAME}_runtime_gen"
