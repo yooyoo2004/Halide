@@ -1,9 +1,5 @@
 # Generator
-halide_generator(halide_blur.generator
-                     SRCS halide_blur_generator.cpp)
-halide_library_from_generator(halide_blur
-                       GENERATOR halide_blur.generator
-                       GENERATOR_ARGS target=host)
+halide_library(halide_blur SRCS halide_blur_generator.cpp)
 
 # Final executable
 add_executable(blur_test test.cpp)

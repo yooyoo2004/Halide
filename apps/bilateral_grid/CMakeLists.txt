@@ -1,14 +1,15 @@
-# Generator
-halide_generator(bilateral_grid.generator
-                     SRCS bilateral_grid_generator.cpp)
-halide_library_from_generator(bilateral_grid
-                       GENERATOR bilateral_grid.generator
-                       GENERATOR_ARGS target=host auto_schedule=false)
-halide_library_from_generator(bilateral_grid_auto_schedule
-                       GENERATOR bilateral_grid.generator
-                       GENERATOR_ARGS target=host auto_schedule=true)
+add_executable(bilateral_grid_process filter.cpp)
+halide_use_image_io(bilateral_grid_process)
 
-# Final executable
-add_executable(filter filter.cpp)
-target_link_libraries(filter PUBLIC bilateral_grid bilateral_grid_auto_schedule)
-halide_use_image_io(filter)
+halide_generator(bilateral_grid.generator SRCS bilateral_grid_generator.cpp)
+foreach(AUTO_SCHEDULE false true)
+    if(${AUTO_SCHEDULE})
+        set(LIB bilateral_grid_auto_schedule)
+    else()
+        set(LIB bilateral_grid)
+    endif()
+    halide_library_from_generator(${LIB}
+                                  GENERATOR bilateral_grid.generator
+                                  GENERATOR_ARGS auto_schedule=${AUTO_SCHEDULE})
+    target_link_libraries(bilateral_grid_process PRIVATE ${LIB})
+endforeach()

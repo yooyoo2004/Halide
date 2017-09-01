@@ -2,20 +2,18 @@
 halide_generator(pipeline.generator
                  SRCS pipeline_generator.cpp)
 halide_library_from_generator(pipeline_c
-                              GENERATOR pipeline.generator
-                              GENERATOR_ARGS target=host)
+                              GENERATOR pipeline.generator)
 halide_library_from_generator(pipeline_native
-                              GENERATOR pipeline.generator
-                              GENERATOR_ARGS target=host)
+                              GENERATOR pipeline.generator)
 
 halide_generator(pipeline_cpp.generator
                  SRCS pipeline_cpp_generator.cpp)
 halide_library_from_generator(pipeline_cpp_cpp
                               GENERATOR pipeline_cpp.generator
-                              GENERATOR_ARGS target=host-c_plus_plus_name_mangling)
+                              GENERATOR_HALIDE_TARGET host-c_plus_plus_name_mangling)
 halide_library_from_generator(pipeline_cpp_native
                               GENERATOR pipeline_cpp.generator
-                              GENERATOR_ARGS target=host-c_plus_plus_name_mangling)
+                              GENERATOR_HALIDE_TARGET host-c_plus_plus_name_mangling)
 
 # Final executable(s)
 add_executable(run_c_backend_and_native run.cpp)

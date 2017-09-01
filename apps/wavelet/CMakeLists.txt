@@ -10,17 +10,19 @@
 project(wavelet)
 cmake_minimum_required(VERSION 3.1.3)
 
-# HalideGenerator.cmake requires this be set to point to the Halide distribution folder we use.
+# HalideGenerator.cmake requires that HALIDE_DISTRIB_DIR be set to point to the Halide distribution folder we use.
 # This assumes it's built at the toplevel via 'make distrib' (ironically, the CMake build isn't
 # yet capable of producing a distrib folder).
 set(HALIDE_DISTRIB_DIR "${CMAKE_CURRENT_LIST_DIR}/../../distrib")
 include("${HALIDE_DISTRIB_DIR}/HalideGenerator.cmake")
 
+# Define the wavelet app
 add_executable(wavelet "${CMAKE_CURRENT_SOURCE_DIR}/wavelet.cpp")
 set_target_properties(wavelet PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED YES CXX_EXTENSIONS NO)
 target_include_directories(wavelet PRIVATE "${HALIDE_INCLUDE_DIR}" "${HALIDE_TOOLS_DIR}")
 halide_use_image_io(wavelet)
 
+# Define a halide_library() for each generator we have, and link each one into wavelet
 file(GLOB GENS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/*_generator.cpp")
 foreach(GEN_SRC ${GENS})
     string(REPLACE "_generator.cpp" "" GEN_NAME "${GEN_SRC}")

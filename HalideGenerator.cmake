@@ -1,15 +1,22 @@
 include(CMakeParseArguments)
 
+# TODO: halide_target_features vs generator_halide_target
+# TODO: namespace: keep or not?
+
+
 cmake_minimum_required(VERSION 3.1.3)
 
 # ----------------------- Public Functions. 
 # These are all documented in README_cmake.md.
 #
-# Note that the following CMake variables may need to be set correctly to use these rules: 
-#   HALIDE_TOOLS_DIR 
-#   HALIDE_INCLUDE_DIR 
-#   HALIDE_COMPILER_LIB 
-#   HALIDE_SYSTEM_LIBS
+# Note that certain CMake variables may need to be set correctly to use these rules:
+#
+# - If you are using a Halide distribution, simply set HALIDE_DISTRIB_DIR
+# to the path to the distrib directory. 
+#
+# - More complex usages (mainly, internal-to-Halide users) may, instead, set some combination
+# of HALIDE_TOOLS_DIR, HALIDE_INCLUDE_DIR, and HALIDE_COMPILER_LIB. 
+#
 
 # Add the include paths and link dependencies for halide_image_io.
 function(halide_use_image_io TARGET)
@@ -61,7 +68,7 @@ function(halide_generator NAME)
     add_library("${GENLIB}" STATIC ${args_SRCS})
     _halide_set_cxx_options("${GENLIB}")
     target_link_libraries("${GENLIB}" ${args_DEPS})
-    target_include_directories("${GENLIB}" PRIVATE "${args_INCLUDES}" "${HALIDE_INCLUDE_DIR}" "${HALIDE_TOOLS_DIR}")
+    target_include_directories("${GENLIB}" PRIVATE ${args_INCLUDES} "${HALIDE_INCLUDE_DIR}" "${HALIDE_TOOLS_DIR}")
     foreach(DEP ${args_DEPS})
       target_include_directories("${GENLIB}" PRIVATE 
                                  $<TARGET_PROPERTY:${DEP},INTERFACE_INCLUDE_DIRECTORIES>)
@@ -112,7 +119,7 @@ endfunction()
 function(halide_library_from_generator BASENAME)
   set(options )
   set(oneValueArgs GENERATOR FUNCTION_NAME GENERATOR_HALIDE_TARGET)
-  set(multiValueArgs GENERATOR_ARGS EXTRA_OUTPUTS FILTER_DEPS)
+  set(multiValueArgs GENERATOR_ARGS EXTRA_OUTPUTS FILTER_DEPS INCLUDES)
   cmake_parse_arguments(args "" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
   if ("${args_GENERATOR}" STREQUAL "")
@@ -126,8 +133,17 @@ function(halide_library_from_generator BASENAME)
   endif()
   # It's fine for EXTRA_OUTPUTS, GENERATOR_ARGS, FILTER_DEPS to be empty
 
-  # TODO: we could be more efficient by only emitting the generated .cpp
-  # file if something actually depends on it.
+  # Some sanity checking
+  if("${args_GENERATOR_HALIDE_TARGET}" MATCHES "^target=")
+    message(FATAL_ERROR "GENERATOR_HALIDE_TARGET should not begin with 'target='.")
+  endif()
+
+  foreach(ARG ${args_GENERATOR_ARGS})
+    if("${ARG}" MATCHES "^target=")
+      message(FATAL_ERROR "GENERATOR_ARGS may not include 'target=whatever'; use GENERATOR_HALIDE_TARGET instead.")
+    endif()
+  endforeach()
+
   set(OUTPUTS static_library h)
   foreach(E ${args_EXTRA_OUTPUTS})
     if("${E}" STREQUAL "cpp")
@@ -198,7 +214,7 @@ function(halide_library_from_generator BASENAME)
   add_library("${BASENAME}" INTERFACE)
   add_dependencies("${BASENAME}" "${BASENAME}_lib_gen" "${RUNTIME_NAME}")
   set_target_properties("${BASENAME}" PROPERTIES 
-      INTERFACE_INCLUDE_DIRECTORIES ${GENFILES_DIR}
+      INTERFACE_INCLUDE_DIRECTORIES ${GENFILES_DIR} ${args_INCLUDES}
       INTERFACE_LINK_LIBRARIES "${GENFILES_DIR}/${BASENAME}${CMAKE_STATIC_LIBRARY_SUFFIX};${RUNTIME_NAME};${args_FILTER_DEPS};${CMAKE_DL_LIBS};${CMAKE_THREAD_LIBS_INIT}")
 
   # A separate invocation for the generated .cpp file, 
@@ -222,7 +238,7 @@ function(halide_library_from_generator BASENAME)
   add_library("${BASENAME}_cc" INTERFACE)
   add_dependencies("${BASENAME}_cc" "${BASENAME}_cc_lib")
   set_target_properties("${BASENAME}_cc" PROPERTIES 
-      INTERFACE_INCLUDE_DIRECTORIES ${GENFILES_DIR}
+      INTERFACE_INCLUDE_DIRECTORIES ${GENFILES_DIR} ${args_INCLUDES}
       INTERFACE_LINK_LIBRARIES "${BASENAME}_cc_lib;${args_FILTER_DEPS}")
 
   # Code to build the BASENAME.rungen target
@@ -257,6 +273,7 @@ function(halide_library NAME)
 
   halide_library_from_generator("${NAME}"
                    DEPS ${args_FILTER_DEPS}
+                   INCLUDES ${args_INCLUDES}
                    GENERATOR "${NAME}.generator"
                    FUNCTION_NAME ${args_FUNCTION_NAME}
                    GENERATOR_HALIDE_TARGET ${args_GENERATOR_HALIDE_TARGET}

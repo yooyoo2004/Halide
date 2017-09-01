@@ -1,9 +1,5 @@
 # Generator
-halide_generator(camera_pipe.generator
-                     SRCS camera_pipe_generator.cpp)
-halide_library_from_generator(camera_pipe
-                       GENERATOR camera_pipe.generator
-                       GENERATOR_ARGS target=host)
+halide_library(camera_pipe SRCS camera_pipe_generator.cpp)
 
 # fcam
 # FIXME: Set -O3 here
