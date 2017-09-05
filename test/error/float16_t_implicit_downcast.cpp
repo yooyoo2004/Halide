@@ -1,5 +1,6 @@
 #include "Halide.h"
 #include <stdio.h>
+#include "test/common/expect_death.h"
 #include <cmath>
 
 using namespace Halide;
@@ -12,7 +13,9 @@ void h_assert(bool condition, const char *msg) {
     }
 }
 
-int main() {
+int main(int argc, char **argv) {
+    HALIDE_EXPECT_DEATH(argc, argv);
+
     Halide::Func f;
     Halide::Var x, y;
 
