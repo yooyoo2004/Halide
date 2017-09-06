@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <string>
 
-#ifdef _MSC_VER
+#ifdef _WIN32
 #define NOMINMAX
 #include <windows.h>
 #else
@@ -16,7 +16,7 @@
 namespace {
 
 inline void halide_expect_death(int argc, char **argv) {
-#ifdef _MSC_VER
+#ifdef _WIN32
     const char *halide_expect_death_flag = "--halide_expect_death_flag";
 
     if (argc == 2 && !strcmp(argv[1], halide_expect_death_flag)) {
